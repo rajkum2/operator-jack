@@ -18,23 +18,30 @@ Established the project foundation:
 - Redaction filters (key-name and pattern matching).
 - JSONL audit log writer.
 
-### M1: System Executor
+### M1: System Executor -- DONE
 
-**Status:** In progress
+**Status:** Complete
 
-Implement real `sys.*` step types with full functionality:
+All 13 `sys.*` step types implemented with real functionality:
 
-- `sys.open_app` -- Launch applications by name using `NSWorkspace` (via helper) or `open -a` fallback.
-- `sys.exec` -- Direct command execution (no shell), with capture limits, `env_clean`, and timeout enforcement.
-- `sys.read_file` -- Read file contents with size limits.
-- `sys.write_file` -- Write file contents with `create_parent` option.
+- `sys.open_app` -- Launch applications via `open -a` Command.
+- `sys.open_url` -- Open URLs via `open` Command, with `allow_domains` enforcement.
+- `sys.quit_app` -- Graceful quit via osascript, force quit via pkill.
+- `sys.read_file` -- Read file contents via `std::fs::read_to_string` with tilde expansion.
+- `sys.write_file` -- Write file contents via `std::fs::write` with `create_parent` option.
+- `sys.append_file` -- Append to files via `OpenOptions::append` with `create_parent` option.
 - `sys.mkdir` -- Create directories with optional `parents` flag.
-- `sys.rm` -- Remove files or directories (high risk, requires confirmation in safe mode).
-- `sys.open_url` -- Open URLs in the default browser, with `allow_domains` enforcement.
+- `sys.move_path` -- Move/rename via `std::fs::rename` with overwrite guard.
+- `sys.copy_path` -- Copy files via `std::fs::copy`, recursive copy for directories.
+- `sys.delete_path` -- Remove files/directories via `remove_file`/`remove_dir_all` with recursive flag.
+- `sys.exec` -- Direct command execution (no shell), with 1MiB capture cap, `env_clean`, $HOME default cwd, and timeout enforcement.
+- `sys.clipboard_get` -- Read clipboard via `pbpaste`.
+- `sys.clipboard_set` -- Write clipboard by piping into `pbcopy`.
 - Policy gate integration: risk classification per step type, interactive prompting, `--yes` bypass.
 - `--dry-run` mode: validate and simulate without executing.
 - `--yes` flag: auto-approve all policy prompts.
-- PID file management and `operator stop` implementation.
+- 21 unit tests for executor, 64 total tests passing.
+- Manual acceptance tests passed: TextEdit open/quit, file ops, URL, clipboard.
 
 ### M2: macOS Helper v1
 

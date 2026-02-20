@@ -441,6 +441,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tracing",
+ "ulid",
 ]
 
 [[package]]

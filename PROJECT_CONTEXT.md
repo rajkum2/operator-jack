@@ -68,6 +68,26 @@
 
 ## VERSION_LOG
 
+### v0.2.2 — 2026-02-20
+**Status:** M1 complete. All 13 sys.* executors implemented. 64 tests pass.
+**Changes:**
+1. Replaced all 13 stub executors with real implementations
+2. sys.open_app: `open -a` via Command
+3. sys.open_url: `open` via Command
+4. sys.quit_app: graceful via osascript, force via pkill
+5. sys.read_file: std::fs::read_to_string with tilde expansion
+6. sys.write_file: std::fs::write with create_parent support
+7. sys.append_file: OpenOptions::append with create_parent
+8. sys.mkdir: create_dir / create_dir_all based on parents flag
+9. sys.move_path: std::fs::rename with overwrite guard
+10. sys.copy_path: std::fs::copy for files, recursive copy for dirs
+11. sys.delete_path: remove_file / remove_dir_all with recursive flag
+12. sys.exec: direct exec (no shell), $HOME default cwd, env_clean, 1MiB capture cap
+13. sys.clipboard_get: pbpaste
+14. sys.clipboard_set: pipe into pbcopy
+15. Added 21 unit tests for executor (file ops, exec, clipboard, edge cases)
+16. Manual acceptance tests passed: TextEdit open/quit, file ops, URL, clipboard
+
 ### v0.2.1 — 2026-02-20
 **Status:** M0 code review findings fixed. 43 tests pass.
 **Fixes (13 findings):**
@@ -117,21 +137,21 @@
 - [x] operator-core: types, validation, interpolation, redaction, events, policy
 - [x] operator-store: SQLite migrations, CRUD repos (12 unit tests passing)
 - [x] operator-ipc: protocol types, stub client
-- [x] operator-exec-system: stub executors for all 13 sys.* step types
+- [x] operator-exec-system: real implementations for all 13 sys.* step types (21 unit tests)
 - [x] operator-runtime: execution engine, policy gates, JSONL logging
 - [x] operator-cli: all commands (doctor, plan, exec, run, logs, stop)
 - [x] Documentation: ARCHITECTURE.md, SECURITY.md, SELECTORS.md, PERMISSIONS_MACOS.md, ROADMAP.md
 - [x] Example plans: open-app.json, file-operations.json, notes-automation.json, chrome-search.json
 - [x] README.md
 - [ ] Swift helper (M2)
-- [ ] Real system executor implementations (M1)
+- [x] Real system executor implementations (M1) — all 13 sys.* types working
 
 ### Milestone Status
 
 | Milestone | Status | Description |
 |-----------|--------|-------------|
 | M0 | DONE | Scaffolding: workspace, types, store, CLI skeleton, stub executors, logging |
-| M1 | NOT STARTED | System executor: sys.* handlers, policy gates, --dry-run, --yes |
+| M1 | DONE | System executor: sys.* handlers, policy gates, --dry-run, --yes |
 | M2 | NOT STARTED | Swift helper v1: IPC server, ping, accessibility check, basic UI info |
 | M3 | NOT STARTED | UI executor v1: find/click/setValue, selector matching, menu selection |
 | M4 | NOT STARTED | Rule-based planner (natural language → typed steps) |
@@ -144,32 +164,17 @@
 
 ## NEXT_ACTIONS
 
-**Immediate next step: Build M1 (System Executor)**
+**Immediate next step: Build M2 (Swift Helper v1)**
 
-M1 deliverables (from spec Section 23):
-1. Replace stub executors with real implementations for all 13 sys.* step types:
-   - sys.open_app: `open -a "AppName"` via std::process::Command
-   - sys.open_url: `open "url"` via std::process::Command
-   - sys.quit_app: `osascript -e 'tell application "X" to quit'`
-   - sys.read_file: std::fs::read_to_string
-   - sys.write_file: std::fs::write (with create_parent support)
-   - sys.append_file: OpenOptions::append
-   - sys.mkdir: std::fs::create_dir_all
-   - sys.move_path: std::fs::rename
-   - sys.copy_path: std::fs::copy (or recursive for dirs)
-   - sys.delete_path: std::fs::remove_file / remove_dir_all
-   - sys.exec: std::process::Command (direct exec, no shell)
-   - sys.clipboard_get: `pbpaste` via Command
-   - sys.clipboard_set: pipe into `pbcopy` via Command
-2. Policy gates already implemented in runtime — verify they work with real execution
-3. Test --dry-run and --yes flags with real steps
-4. Manual acceptance tests:
-   - Open/quit a safe app (TextEdit)
-   - Create folder, write file, read file
-   - Open URL in Chrome
-   - Clipboard get/set round-trip
+M2 deliverables (from spec Section 23):
+1. Swift SPM package in `operator/macos-helper/`
+2. NDJSON IPC server over stdin/stdout
+3. `ping` command (health check)
+4. Accessibility permission check
+5. Basic UI element info query
+6. Wire helper discovery into runtime (operator-ipc client connects to real helper)
 
-**After M1:** Ask user for confirmation before proceeding to M2 (Swift helper).
+**After M2:** Ask user for confirmation before proceeding to M3 (UI executor v1).
 
 ---
 
@@ -218,4 +223,4 @@ When multiple AX elements match and no `index` is given: interactive mode prompt
 
 ---
 
-*Last updated: 2026-02-20 — M0 COMPLETE + 13 findings fixed. All crates compile, 43 tests pass, CLI works. Ready for M1.*
+*Last updated: 2026-02-20 — M1 COMPLETE. All 13 sys.* executors implemented, 64 tests pass, manual acceptance tests pass. Ready for M2.*
