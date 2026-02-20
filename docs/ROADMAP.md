@@ -1,0 +1,163 @@
+# Operator CLI Roadmap
+
+## Milestones
+
+### M0: Scaffolding -- DONE
+
+**Status:** Complete
+
+Established the project foundation:
+
+- Cargo workspace with six crates: `operator-cli`, `operator-runtime`, `operator-core`, `operator-store`, `operator-exec-system`, `operator-ipc`.
+- Core types defined: `Plan`, `Step`, `StepResult`, `Selector`, `PolicyLevel`, `RunStatus`.
+- Plan JSON parsing and validation.
+- SQLite store with schema migrations.
+- CLI skeleton with Clap: `run`, `plan validate`, `plan list`, `doctor`, `stop` commands.
+- Stub executors for all step types (return `StepResult` with status `skipped` and a message indicating the executor is not yet implemented).
+- Variable interpolation engine.
+- Redaction filters (key-name and pattern matching).
+- JSONL audit log writer.
+
+### M1: System Executor
+
+**Status:** In progress
+
+Implement real `sys.*` step types with full functionality:
+
+- `sys.open_app` -- Launch applications by name using `NSWorkspace` (via helper) or `open -a` fallback.
+- `sys.exec` -- Direct command execution (no shell), with capture limits, `env_clean`, and timeout enforcement.
+- `sys.read_file` -- Read file contents with size limits.
+- `sys.write_file` -- Write file contents with `create_parent` option.
+- `sys.mkdir` -- Create directories with optional `parents` flag.
+- `sys.rm` -- Remove files or directories (high risk, requires confirmation in safe mode).
+- `sys.open_url` -- Open URLs in the default browser, with `allow_domains` enforcement.
+- Policy gate integration: risk classification per step type, interactive prompting, `--yes` bypass.
+- `--dry-run` mode: validate and simulate without executing.
+- `--yes` flag: auto-approve all policy prompts.
+- PID file management and `operator stop` implementation.
+
+### M2: macOS Helper v1
+
+**Status:** Planned
+
+Build the Swift helper binary and IPC bridge:
+
+- Swift executable in `macos-helper/` that communicates via NDJSON over stdio.
+- IPC protocol: JSON request/response with UUID correlation, timeouts, error codes.
+- `ping` method for connectivity testing.
+- `ui.checkAccessibilityPermission` method for `operator doctor`.
+- `ui.getAppInfo` method to retrieve basic application information (title, bundle ID, PID).
+- `ui.getElementTree` method to dump the accessibility tree for debugging.
+- Graceful shutdown: close stdin to signal exit, wait for process to terminate.
+- `operator-ipc` crate: spawn helper, send requests, correlate responses, enforce timeouts.
+
+### M3: UI Executor v1
+
+**Status:** Planned
+
+Implement core UI automation steps:
+
+- `ui.find_element` -- Find elements using selector matching against the accessibility tree.
+- `ui.click` -- Click a UI element (single click, double click).
+- `ui.set_value` -- Set the value of a text field, checkbox, or other input element.
+- `ui.type_text` -- Type text by simulating keyboard input.
+- `ui.key_press` -- Simulate key presses (Return, Tab, Escape, modifier combos).
+- `ui.select_menu` -- Navigate application menus by path (e.g., `["File", "New Note"]`).
+- `ui.wait_for` -- Wait for an element matching a selector to appear, with timeout.
+- `ui.get_value` -- Read the current value of a UI element.
+- Selector matching engine: pre-order traversal, all field types, index disambiguation.
+- Interactive disambiguation: present options to user when multiple elements match.
+- Non-interactive disambiguation: fail with `SELECTOR_AMBIGUOUS`.
+- `allow_apps` enforcement for all UI steps.
+
+### M4: Rule-Based Planner
+
+**Status:** Planned
+
+Enable natural language input for common automation patterns:
+
+- Parser for approximately 20 command patterns covering frequent macOS tasks:
+  - "open [app]"
+  - "create folder [path]"
+  - "write [content] to [file]"
+  - "read [file]"
+  - "click [button/element] in [app]"
+  - "type [text] in [app]"
+  - "go to [url]"
+  - "take screenshot"
+  - "select menu [path] in [app]"
+  - "wait for [element] in [app]"
+  - And more.
+- Patterns are matched using keyword extraction and slot filling, not a language model.
+- Generates a plan JSON from the parsed input.
+- `operator do "open Notes and type hello"` command interface.
+- Graceful fallback: unrecognized input returns a clear error with suggestions.
+
+### M5: Browser Executor (CDP)
+
+**Status:** Planned
+
+Add Chrome DevTools Protocol support for web automation:
+
+- Connect to Chrome/Chromium via CDP (Chrome must be launched with `--remote-debugging-port`).
+- `browser.navigate` -- Navigate to a URL.
+- `browser.click` -- Click an element identified by CSS selector.
+- `browser.type` -- Type text into a form field.
+- `browser.get_text` -- Extract text content from elements.
+- `browser.execute_js` -- Run JavaScript in the page context (high risk).
+- `browser.screenshot` -- Capture a screenshot of the page or element.
+- `browser.wait_for` -- Wait for a CSS selector to appear in the DOM.
+- `allow_domains` enforcement: reject navigation to domains not in the allowlist.
+- Connection lifecycle management: discover CDP port, connect WebSocket, handle disconnects.
+
+### M6: Skills System
+
+**Status:** Planned
+
+Introduce reusable automation macros:
+
+- Skills are YAML or JSON manifest files that define a parameterized sequence of steps.
+- Skill manifests live in `~/.operator/skills/` or the project's `skills/` directory.
+- Skills declare inputs (required and optional parameters) and map them to step variables.
+- `operator skill run <name> --param key=value` invocation.
+- `operator skill list` to discover available skills.
+- `operator skill validate <name>` to check a skill manifest.
+- Skills are expanded into a full plan at execution time -- they do not introduce new runtime concepts.
+- Community sharing via copying skill files (no package manager, no network).
+
+### M7: Robustness and Recovery
+
+**Status:** Planned
+
+Improve reliability for real-world automation:
+
+- Enhanced retry logic with exponential backoff and jitter.
+- Selector ranking: when multiple elements match, score them by confidence (exact name match > substring match > path match) and pick the best.
+- Plan replay: re-run a previous run with the same inputs, skipping already-completed steps.
+- Checkpoint/resume: save engine state periodically so a crashed run can be resumed from the last successful step.
+- Better error diagnostics: structured error codes, suggested fixes, links to documentation.
+- Flaky step detection: track step success rates across runs and warn about unreliable steps.
+
+### M8: Offline Speech-to-Text Input
+
+**Status:** Planned
+
+Enable voice-driven automation using local speech recognition:
+
+- Integrate whisper.cpp for offline speech-to-text (no cloud API, no network).
+- `operator listen` command: activate microphone, transcribe speech, pipe text to the rule-based planner (M4).
+- Push-to-talk and voice-activity-detection modes.
+- Audio stays local -- recorded audio is processed in memory and discarded after transcription.
+- Configurable model size (tiny, base, small, medium) for speed vs. accuracy tradeoff.
+- Works entirely offline after initial model download.
+
+### Future
+
+These milestones are not yet scheduled but represent the long-term vision:
+
+- **Windows port (UIA)** -- Replace macOS Accessibility with Windows UI Automation. System executor adapts to Windows APIs. IPC bridge communicates with a C# or C++ helper.
+- **Linux port (AT-SPI)** -- Replace macOS Accessibility with AT-SPI2 (Assistive Technology Service Provider Interface) for GNOME/GTK and Qt applications.
+- **Local LLM planner** -- Replace or augment the rule-based planner (M4) with a local language model (e.g., llama.cpp) for more flexible natural language understanding. No cloud calls.
+- **Multi-machine orchestration** -- Coordinate plans across multiple machines on a local network. Secure peer-to-peer communication, distributed step execution, aggregated results.
+- **Screen recording and replay** -- Record user actions as a plan, then replay them. Uses accessibility events and screen capture to generate step sequences.
+- **Plan editor GUI** -- A native macOS app (SwiftUI) for visually building and editing plans with drag-and-drop steps, live element picking, and real-time validation.

@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "name": "File operations demo",
+  "description": "Creates a folder, writes a file, reads it back",
+  "variables": {
+    "base_dir": "/tmp/operator-demo"
+  },
+  "steps": [
+    {
+      "id": "create_dir",
+      "type": "sys.mkdir",
+      "params": { "path": "${base_dir}", "parents": true }
+    },
+    {
+      "id": "write_file",
+      "type": "sys.write_file",
+      "params": {
+        "path": "${base_dir}/hello.txt",
+        "content": "Hello from Operator CLI!",
+        "create_parent": false
+      },
+      "on_fail": "abort"
+    },
+    {
+      "id": "read_back",
+      "type": "sys.read_file",
+      "params": { "path": "${base_dir}/hello.txt" }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+[package]
+name = "operator-runtime"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+operator-core = { path = "../operator-core" }
+operator-store = { path = "../operator-store" }
+operator-ipc = { path = "../operator-ipc" }
+operator-exec-system = { path = "../operator-exec-system" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+ulid.workspace = true
+tracing.workspace = true

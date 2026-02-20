@@ -1,0 +1,15 @@
+[package]
+name = "operator-store"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+operator-core = { path = "../operator-core" }
+serde.workspace = true
+rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite_migration = "1"
+serde_json.workspace = true
+chrono.workspace = true
+ulid.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

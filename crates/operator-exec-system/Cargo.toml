@@ -1,0 +1,10 @@
+[package]
+name = "operator-exec-system"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+operator-core = { path = "../operator-core" }
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

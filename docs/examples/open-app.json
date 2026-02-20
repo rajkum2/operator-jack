@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "Open TextEdit",
+  "description": "Opens the TextEdit application",
+  "steps": [
+    {
+      "id": "open_textedit",
+      "type": "sys.open_app",
+      "params": { "app": "TextEdit" }
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "name": "Open Chrome and search",
+  "description": "Opens Chrome and navigates to a search URL",
+  "allow_domains": ["google.com"],
+  "steps": [
+    {
+      "id": "open_chrome",
+      "type": "sys.open_app",
+      "params": { "app": "Google Chrome" }
+    },
+    {
+      "id": "search",
+      "type": "sys.open_url",
+      "params": { "url": "https://www.google.com/search?q=operator+cli+automation" }
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+[package]
+name = "operator-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "operator"
+path = "src/main.rs"
+
+[dependencies]
+operator-core = { path = "../operator-core" }
+operator-runtime = { path = "../operator-runtime" }
+operator-store = { path = "../operator-store" }
+clap = { version = "4", features = ["derive"] }
+anyhow.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dirs = "6"
+chrono.workspace = true
+ulid.workspace = true

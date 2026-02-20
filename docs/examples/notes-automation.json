@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "name": "Create a note in Notes",
+  "description": "Opens Notes app, creates a new note with a title and body",
+  "mode": "safe",
+  "allow_apps": ["Notes"],
+  "variables": {
+    "note_title": "Sprint Planning",
+    "note_body": "Agenda:\n1. Review backlog\n2. Estimate stories\n3. Set sprint goal"
+  },
+  "steps": [
+    {
+      "id": "open_notes",
+      "type": "sys.open_app",
+      "params": { "app": "Notes" }
+    },
+    {
+      "id": "wait_for_notes",
+      "type": "ui.wait_for",
+      "params": {
+        "app": "Notes",
+        "selector": { "role": "AXWindow" },
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "new_note_menu",
+      "type": "ui.select_menu",
+      "params": {
+        "app": "Notes",
+        "menu_path": ["File", "New Note"]
+      }
+    },
+    {
+      "id": "type_title",
+      "type": "ui.type_text",
+      "params": {
+        "app": "Notes",
+        "text": "${note_title}"
+      }
+    },
+    {
+      "id": "press_enter",
+      "type": "ui.key_press",
+      "params": {
+        "app": "Notes",
+        "key": "Return"
+      }
+    },
+    {
+      "id": "type_body",
+      "type": "ui.type_text",
+      "params": {
+        "app": "Notes",
+        "text": "${note_body}"
+      }
+    }
+  ]
+}
