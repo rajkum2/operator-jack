@@ -188,7 +188,8 @@ fn main() -> Result<()> {
 /// Checks that the environment is correctly configured:
 /// - SQLite store can be opened
 /// - Log directory exists and is writable
-/// - Helper binary is reachable (expected to be absent in M0)
+/// - Helper binary is reachable
+/// - Accessibility permission is granted (if helper is available)
 fn cmd_doctor(cli: &Cli) -> Result<()> {
     let db_path = resolve_db_path();
     let log_dir = resolve_log_dir();
@@ -202,11 +203,42 @@ fn cmd_doctor(cli: &Cli) -> Result<()> {
     let log_status = if log_ok { "OK" } else { "FAIL" };
 
     // 3. Helper binary
-    let helper_found = resolve_helper_path(cli).is_some();
-    let helper_status = if helper_found {
-        "OK"
+    let helper_path = resolve_helper_path(cli);
+    let helper_found = helper_path.is_some();
+    let helper_status = if helper_found { "OK" } else { "NOT FOUND" };
+
+    // 4. Accessibility permission (requires helper)
+    let accessibility_status = if let Some(ref hp) = helper_path {
+        let mut client =
+            operator_ipc::client::HelperClient::new(Some(hp.to_string_lossy().to_string()));
+        match client.connect() {
+            Ok(()) => {
+                let result = client.send(
+                    "ui.check_accessibility_permission",
+                    serde_json::json!({"prompt": true}),
+                );
+                client.disconnect();
+                match result {
+                    Ok(val) => {
+                        if val.get("trusted").and_then(|v: &serde_json::Value| v.as_bool()).unwrap_or(false) {
+                            "GRANTED"
+                        } else {
+                            "NOT GRANTED"
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("accessibility check failed: {}", e);
+                        "CHECK FAILED"
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("helper connection failed: {}", e);
+                "CHECK FAILED"
+            }
+        }
     } else {
-        "NOT FOUND (expected - M0 stub)"
+        "SKIPPED (helper not found)"
     };
 
     if cli.json {
@@ -214,6 +246,11 @@ fn cmd_doctor(cli: &Cli) -> Result<()> {
             "sqlite": sqlite_status,
             "log_dir": log_status,
             "helper": helper_status,
+            "accessibility": match accessibility_status {
+                "GRANTED" => "granted",
+                "NOT GRANTED" => "not_granted",
+                _ => "skipped",
+            },
             "db_path": db_path.display().to_string(),
             "log_dir_path": log_dir.display().to_string(),
         });
@@ -221,9 +258,16 @@ fn cmd_doctor(cli: &Cli) -> Result<()> {
     } else {
         println!("Operator Doctor");
         println!("---------------");
-        println!("SQLite:  {}", sqlite_status);
-        println!("Log dir: {}", log_status);
-        println!("Helper:  {}", helper_status);
+        println!("SQLite:        {}", sqlite_status);
+        println!("Log dir:       {}", log_status);
+        println!("Helper:        {}", helper_status);
+        println!("Accessibility: {}", accessibility_status);
+        if accessibility_status == "NOT GRANTED" {
+            println!();
+            println!("  To grant accessibility access:");
+            println!("  System Settings > Privacy & Security > Accessibility");
+            println!("  Add and enable the terminal application you use to run operator.");
+        }
         println!();
         println!("DB path:  {}", db_path.display());
         println!("Log dir:  {}", log_dir.display());
@@ -768,6 +812,11 @@ fn build_engine_config(cli: &Cli) -> Result<EngineConfig> {
     let allow_domains = parse_comma_list(&cli.allow_domains);
     let log_dir = resolve_log_dir();
 
+    // Resolve the helper path through all discovery mechanisms (CLI flag,
+    // env var, PATH, sibling, dev fallback) instead of passing just the
+    // raw CLI flag.
+    let helper_path = resolve_helper_path(cli).map(|p| p.to_string_lossy().to_string());
+
     Ok(EngineConfig {
         mode,
         yes_to_all: cli.yes,
@@ -776,7 +825,7 @@ fn build_engine_config(cli: &Cli) -> Result<EngineConfig> {
         allow_apps,
         allow_domains,
         log_dir,
-        helper_path: cli.helper_path.clone(),
+        helper_path,
         default_timeout_ms: 30_000,
         default_retries: 0,
         default_backoff_ms: 1_000,
@@ -989,6 +1038,25 @@ fn resolve_helper_path(cli: &Cli) -> Option<PathBuf> {
             let fallback = dir.join("operator-macos-helper");
             if fallback.exists() {
                 return Some(fallback);
+            }
+        }
+    }
+
+    // 5. Dev fallback: Swift build output relative to the executable.
+    //    When running from `target/debug/operator`, the helper lives at
+    //    `../../macos-helper/.build/{release,debug}/operator-macos-helper`.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            for profile in &["release", "debug"] {
+                let dev_path = dir
+                    .join("../../macos-helper/.build")
+                    .join(profile)
+                    .join("operator-macos-helper");
+                if let Ok(canonical) = dev_path.canonicalize() {
+                    if canonical.exists() {
+                        return Some(canonical);
+                    }
+                }
             }
         }
     }

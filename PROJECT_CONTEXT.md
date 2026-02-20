@@ -68,6 +68,22 @@
 
 ## VERSION_LOG
 
+### v0.2.3 — 2026-02-20
+**Status:** M2 complete. Swift helper v1 with real IPC. 73 tests pass.
+**Changes:**
+1. Created Swift SPM package in `macos-helper/` with NDJSON stdin/stdout server
+2. Implemented `ui.ping` handler (protocol handshake, version validation)
+3. Implemented `ui.checkAccessibilityPermission` handler (AXIsProcessTrustedWithOptions)
+4. Implemented `ui.listApps` handler (NSWorkspace.shared.runningApplications, .regular filter)
+5. Created NDJSON framing module (`framing.rs`) with 1 MiB line cap, EOF detection
+6. Replaced HelperClient stub with real implementation: process spawning, NDJSON communication, handshake, crash detection
+7. Added method name translation (snake_case → camelCase) for all 11 ui.* step types
+8. Added dev fallback helper path resolution (Swift .build/release and .build/debug)
+9. Wired resolved helper path into EngineConfig (was passing raw CLI flag only)
+10. Upgraded `operator doctor` with 4th accessibility check (spawn helper, ping, check permission)
+11. Added 9 new tests (5 framing, 4 client), 73 total tests passing
+12. Integration test: `ui.list_apps` executes end-to-end through the engine
+
 ### v0.2.2 — 2026-02-20
 **Status:** M1 complete. All 13 sys.* executors implemented. 64 tests pass.
 **Changes:**
@@ -136,14 +152,14 @@
 - [x] Rust workspace scaffolding (6 crates)
 - [x] operator-core: types, validation, interpolation, redaction, events, policy
 - [x] operator-store: SQLite migrations, CRUD repos (12 unit tests passing)
-- [x] operator-ipc: protocol types, stub client
+- [x] operator-ipc: protocol types, real IPC client with NDJSON framing
 - [x] operator-exec-system: real implementations for all 13 sys.* step types (21 unit tests)
 - [x] operator-runtime: execution engine, policy gates, JSONL logging
 - [x] operator-cli: all commands (doctor, plan, exec, run, logs, stop)
 - [x] Documentation: ARCHITECTURE.md, SECURITY.md, SELECTORS.md, PERMISSIONS_MACOS.md, ROADMAP.md
 - [x] Example plans: open-app.json, file-operations.json, notes-automation.json, chrome-search.json
 - [x] README.md
-- [ ] Swift helper (M2)
+- [x] Swift helper (M2): NDJSON server, ping, accessibility check, listApps
 - [x] Real system executor implementations (M1) — all 13 sys.* types working
 
 ### Milestone Status
@@ -152,7 +168,7 @@
 |-----------|--------|-------------|
 | M0 | DONE | Scaffolding: workspace, types, store, CLI skeleton, stub executors, logging |
 | M1 | DONE | System executor: sys.* handlers, policy gates, --dry-run, --yes |
-| M2 | NOT STARTED | Swift helper v1: IPC server, ping, accessibility check, basic UI info |
+| M2 | DONE | Swift helper v1: IPC server, ping, accessibility check, listApps |
 | M3 | NOT STARTED | UI executor v1: find/click/setValue, selector matching, menu selection |
 | M4 | NOT STARTED | Rule-based planner (natural language → typed steps) |
 | M5 | NOT STARTED | Browser executor (CDP) |
@@ -164,17 +180,20 @@
 
 ## NEXT_ACTIONS
 
-**Immediate next step: Build M2 (Swift Helper v1)**
+**Immediate next step: Build M3 (UI Executor v1)**
 
-M2 deliverables (from spec Section 23):
-1. Swift SPM package in `operator/macos-helper/`
-2. NDJSON IPC server over stdin/stdout
-3. `ping` command (health check)
-4. Accessibility permission check
-5. Basic UI element info query
-6. Wire helper discovery into runtime (operator-ipc client connects to real helper)
+M3 deliverables (from spec Section 23):
+1. `ui.find` — find elements using selector matching against the accessibility tree
+2. `ui.click` — click a UI element
+3. `ui.set_value` — set text field value via AX API
+4. `ui.type_text` — type text via CGEvent keystrokes
+5. `ui.key_press` — simulate key presses
+6. `ui.select_menu` — navigate application menus
+7. `ui.wait_for` — wait for element to appear
+8. `ui.read_text` — read element value
+9. Selector matching engine in Swift helper
 
-**After M2:** Ask user for confirmation before proceeding to M3 (UI executor v1).
+**Before starting M3:** Ask user for confirmation.
 
 ---
 
@@ -223,4 +242,4 @@ When multiple AX elements match and no `index` is given: interactive mode prompt
 
 ---
 
-*Last updated: 2026-02-20 — M1 COMPLETE. All 13 sys.* executors implemented, 64 tests pass, manual acceptance tests pass. Ready for M2.*
+*Last updated: 2026-02-20 — M2 COMPLETE. Swift helper v1 with real IPC, 73 tests pass, integration tests pass. Ready for M3.*

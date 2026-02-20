@@ -1,5 +1,6 @@
 # Build artifacts
 /target/
+macos-helper/.build/
 
 # macOS
 .DS_Store

@@ -43,20 +43,22 @@ All 13 `sys.*` step types implemented with real functionality:
 - 21 unit tests for executor, 64 total tests passing.
 - Manual acceptance tests passed: TextEdit open/quit, file ops, URL, clipboard.
 
-### M2: macOS Helper v1
+### M2: macOS Helper v1 -- DONE
 
-**Status:** Planned
+**Status:** Complete
 
-Build the Swift helper binary and IPC bridge:
+Built the Swift helper binary and IPC bridge:
 
-- Swift executable in `macos-helper/` that communicates via NDJSON over stdio.
-- IPC protocol: JSON request/response with UUID correlation, timeouts, error codes.
-- `ping` method for connectivity testing.
-- `ui.checkAccessibilityPermission` method for `operator doctor`.
-- `ui.getAppInfo` method to retrieve basic application information (title, bundle ID, PID).
-- `ui.getElementTree` method to dump the accessibility tree for debugging.
-- Graceful shutdown: close stdin to signal exit, wait for process to terminate.
-- `operator-ipc` crate: spawn helper, send requests, correlate responses, enforce timeouts.
+- Swift SPM executable in `macos-helper/` communicating via NDJSON over stdin/stdout.
+- IPC protocol: JSON request/response with ULID correlation, error codes, 1 MiB line cap.
+- `ui.ping` method for connectivity testing and protocol handshake (validates `protocol_version == "1"`).
+- `ui.checkAccessibilityPermission` method with optional system prompt dialog, integrated into `operator doctor`.
+- `ui.listApps` method listing running applications (dock-visible, with name/bundleId/pid/active).
+- Graceful shutdown: close stdin to signal EOF, wait 2s, kill if still alive.
+- `operator-ipc` crate: real process spawning, NDJSON framing, handshake validation, method name translation (snake_case to camelCase), crash detection.
+- `operator doctor` upgraded with 4th accessibility check.
+- Helper auto-discovery: CLI flag, env var, PATH, sibling, dev fallback.
+- 9 new unit tests (5 framing + 4 client), 73 total tests passing.
 
 ### M3: UI Executor v1
 

@@ -4,7 +4,7 @@ Operator is a local-first, privacy-respecting command-line tool for automating m
 
 ## Current Status
 
-**Milestone 1 (System Executor) is complete.** The workspace structure, core types, plan validation, SQLite store, CLI skeleton, and all 13 `sys.*` executors are fully implemented with 64 tests passing. M2 (Swift macOS helper) is next.
+**Milestone 2 (Swift Helper v1) is complete.** The workspace structure, core types, plan validation, SQLite store, CLI skeleton, all 13 `sys.*` executors, and the Swift macOS helper with real IPC are fully implemented with 73 tests passing. M3 (UI executor v1) is next.
 
 ## Quick Start
 

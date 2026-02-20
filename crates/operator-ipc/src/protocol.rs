@@ -20,7 +20,7 @@ impl IpcRequest {
 }
 
 /// A response received from the macOS helper process over NDJSON.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct IpcResponse {
     pub id: String,
     pub ok: bool,
@@ -31,7 +31,7 @@ pub struct IpcResponse {
 }
 
 /// The error payload inside an IPC response when `ok` is false.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct IpcErrorPayload {
     pub code: String,
     pub message: String,

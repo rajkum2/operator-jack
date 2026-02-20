@@ -413,6 +413,7 @@ dependencies = [
  "clap",
  "dirs",
  "operator-core",
+ "operator-ipc",
  "operator-runtime",
  "operator-store",
  "serde_json",
