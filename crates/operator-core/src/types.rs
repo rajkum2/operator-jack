@@ -61,6 +61,10 @@ pub enum StepType {
     UiWaitFor,
     #[serde(rename = "ui.select_menu")]
     UiSelectMenu,
+    #[serde(rename = "ui.list_windows")]
+    UiListWindows,
+    #[serde(rename = "ui.focus_window")]
+    UiFocusWindow,
 }
 
 impl StepType {
@@ -91,7 +95,9 @@ impl StepType {
             | StepType::UiKeyPress
             | StepType::UiReadText
             | StepType::UiWaitFor
-            | StepType::UiSelectMenu => "ui",
+            | StepType::UiSelectMenu
+            | StepType::UiListWindows
+            | StepType::UiFocusWindow => "ui",
         }
     }
 
@@ -122,6 +128,8 @@ impl StepType {
             StepType::UiReadText => "ui.read_text",
             StepType::UiWaitFor => "ui.wait_for",
             StepType::UiSelectMenu => "ui.select_menu",
+            StepType::UiListWindows => "ui.list_windows",
+            StepType::UiFocusWindow => "ui.focus_window",
         }
     }
 }

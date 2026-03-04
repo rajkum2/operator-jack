@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "name": "Notes create and verify",
+  "description": "Opens Notes, focuses app, types text, presses Return, reads back text",
+  "mode": "unsafe",
+  "allow_apps": ["Notes"],
+  "variables": {
+    "note_title": "M3 Test Note"
+  },
+  "steps": [
+    {
+      "id": "open_notes",
+      "type": "sys.open_app",
+      "params": { "app": "Notes" }
+    },
+    {
+      "id": "focus_notes",
+      "type": "ui.focus_app",
+      "params": { "app": "Notes" }
+    },
+    {
+      "id": "wait_window",
+      "type": "ui.wait_for",
+      "params": {
+        "app": "Notes",
+        "selector": { "role": "AXWindow" },
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "new_note",
+      "type": "ui.select_menu",
+      "params": {
+        "app": "Notes",
+        "menu_path": ["File", "New Note"]
+      }
+    },
+    {
+      "id": "type_title",
+      "type": "ui.type_text",
+      "params": {
+        "app": "Notes",
+        "text": "${note_title}"
+      }
+    },
+    {
+      "id": "press_enter",
+      "type": "ui.key_press",
+      "params": {
+        "app": "Notes",
+        "key": "Return"
+      }
+    },
+    {
+      "id": "type_body",
+      "type": "ui.type_text",
+      "params": {
+        "app": "Notes",
+        "text": "This is the body of the test note."
+      }
+    }
+  ]
+}

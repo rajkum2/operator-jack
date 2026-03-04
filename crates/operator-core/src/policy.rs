@@ -24,7 +24,8 @@ pub fn risk_level(step_type: &StepType) -> RiskLevel {
         | StepType::UiFind
         | StepType::UiReadText
         | StepType::UiWaitFor
-        | StepType::UiCheckAccessibilityPermission => RiskLevel::Low,
+        | StepType::UiCheckAccessibilityPermission
+        | StepType::UiListWindows => RiskLevel::Low,
 
         // High risk -- filesystem mutations and arbitrary command execution
         StepType::SysWriteFile
@@ -45,7 +46,8 @@ pub fn risk_level(step_type: &StepType) -> RiskLevel {
         | StepType::UiSetValue
         | StepType::UiTypeText
         | StepType::UiKeyPress
-        | StepType::UiSelectMenu => RiskLevel::Medium,
+        | StepType::UiSelectMenu
+        | StepType::UiFocusWindow => RiskLevel::Medium,
     }
 }
 
@@ -112,5 +114,17 @@ mod tests {
     fn test_unsafe_mode_never_requires_confirmation() {
         assert!(!requires_confirmation(&StepType::SysExec, &Mode::Unsafe));
         assert!(!requires_confirmation(&StepType::SysDeletePath, &Mode::Unsafe));
+    }
+
+    #[test]
+    fn test_list_windows_is_low_risk() {
+        assert_eq!(risk_level(&StepType::UiListWindows), RiskLevel::Low);
+        assert!(!requires_confirmation(&StepType::UiListWindows, &Mode::Safe));
+    }
+
+    #[test]
+    fn test_focus_window_is_medium_risk() {
+        assert_eq!(risk_level(&StepType::UiFocusWindow), RiskLevel::Medium);
+        assert!(requires_confirmation(&StepType::UiFocusWindow, &Mode::Safe));
     }
 }

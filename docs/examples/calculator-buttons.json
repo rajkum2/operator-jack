@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "name": "Calculator button test",
+  "description": "Opens Calculator, clicks 1 + 2 = and verifies the display shows 3",
+  "mode": "unsafe",
+  "allow_apps": ["Calculator"],
+  "steps": [
+    {
+      "id": "open_calc",
+      "type": "sys.open_app",
+      "params": { "app": "Calculator" }
+    },
+    {
+      "id": "wait_calc",
+      "type": "ui.wait_for",
+      "params": {
+        "app": "Calculator",
+        "selector": { "role": "AXWindow" },
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "click_1",
+      "type": "ui.click",
+      "params": {
+        "app": "Calculator",
+        "selector": { "role": "AXButton", "name": "1" }
+      }
+    },
+    {
+      "id": "click_plus",
+      "type": "ui.click",
+      "params": {
+        "app": "Calculator",
+        "selector": { "role": "AXButton", "name": "+" }
+      }
+    },
+    {
+      "id": "click_2",
+      "type": "ui.click",
+      "params": {
+        "app": "Calculator",
+        "selector": { "role": "AXButton", "name": "2" }
+      }
+    },
+    {
+      "id": "click_eq",
+      "type": "ui.click",
+      "params": {
+        "app": "Calculator",
+        "selector": { "role": "AXButton", "name": "=" }
+      }
+    },
+    {
+      "id": "read_display",
+      "type": "ui.read_text",
+      "params": {
+        "app": "Calculator",
+        "selector": { "role": "AXStaticText", "identifier": "main display" }
+      }
+    }
+  ]
+}

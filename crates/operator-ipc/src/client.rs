@@ -143,9 +143,15 @@ impl HelperClient {
         if response.ok {
             Ok(response.result.unwrap_or(serde_json::json!({})))
         } else if let Some(err) = response.error {
+            let details = if err.details == serde_json::Value::Null || err.details == serde_json::json!({}) {
+                None
+            } else {
+                Some(err.details)
+            };
             Err(IpcError::HelperError {
                 code: err.code,
                 message: err.message,
+                details,
             })
         } else {
             Err(IpcError::InvalidResponse(
@@ -239,6 +245,8 @@ fn translate_method_name(step_type_str: &str) -> String {
         "ui.read_text" => "ui.readText".to_string(),
         "ui.wait_for" => "ui.waitFor".to_string(),
         "ui.select_menu" => "ui.selectMenu".to_string(),
+        "ui.list_windows" => "ui.listWindows".to_string(),
+        "ui.focus_window" => "ui.focusWindow".to_string(),
         // These are already the same in both conventions.
         "ui.find" | "ui.click" | "ui.ping" => step_type_str.to_string(),
         // Unknown method — pass through as-is.
@@ -265,6 +273,8 @@ mod tests {
         assert_eq!(translate_method_name("ui.read_text"), "ui.readText");
         assert_eq!(translate_method_name("ui.wait_for"), "ui.waitFor");
         assert_eq!(translate_method_name("ui.select_menu"), "ui.selectMenu");
+        assert_eq!(translate_method_name("ui.list_windows"), "ui.listWindows");
+        assert_eq!(translate_method_name("ui.focus_window"), "ui.focusWindow");
 
         // Already camelCase / no translation needed
         assert_eq!(translate_method_name("ui.find"), "ui.find");

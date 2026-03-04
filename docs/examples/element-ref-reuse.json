@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "name": "Element ref reuse test",
+  "description": "Finds an element, then clicks it using the element_ref from the find result",
+  "mode": "unsafe",
+  "allow_apps": ["Calculator"],
+  "steps": [
+    {
+      "id": "open_calc",
+      "type": "sys.open_app",
+      "params": { "app": "Calculator" }
+    },
+    {
+      "id": "wait_calc",
+      "type": "ui.wait_for",
+      "params": {
+        "app": "Calculator",
+        "selector": { "role": "AXWindow" },
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "find_button",
+      "type": "ui.find",
+      "params": {
+        "app": "Calculator",
+        "selector": { "role": "AXButton", "name": "5" }
+      }
+    },
+    {
+      "id": "click_by_ref",
+      "type": "ui.click",
+      "params": {
+        "app": "Calculator",
+        "element_ref": "${step.find_button.output.matches[0].element_ref}"
+      }
+    },
+    {
+      "id": "read_display",
+      "type": "ui.read_text",
+      "params": {
+        "app": "Calculator",
+        "selector": { "role": "AXStaticText", "identifier": "main display" }
+      }
+    }
+  ]
+}

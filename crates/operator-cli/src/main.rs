@@ -1,6 +1,6 @@
-//! Operator CLI — macOS-first CLI for deterministic computer automation.
+//! Operator Jack — macOS-first CLI for deterministic computer automation.
 //!
-//! This is the binary entry point for the `operator` command. It uses `clap`
+//! This is the binary entry point for the `operator-jack` command. It uses `clap`
 //! derive for argument parsing and dispatches to command functions that
 //! coordinate between `operator-core`, `operator-store`, and
 //! `operator-runtime`.
@@ -18,6 +18,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
+use operator_core::config::OperatorConfig;
 use operator_core::types::{Mode, Plan, RunStatus};
 use operator_core::validation::validate_plan;
 use operator_runtime::engine::{Engine, EngineConfig, RunSummary};
@@ -28,7 +29,7 @@ use operator_store::Store;
 // ---------------------------------------------------------------------------
 
 #[derive(Parser)]
-#[command(name = "operator", version, about = "macOS-first CLI for deterministic computer automation")]
+#[command(name = "operator-jack", version, about = "macOS-first CLI for deterministic computer automation")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -117,6 +118,29 @@ enum Commands {
 
     /// Stop a running execution
     Stop,
+
+    /// UI automation utilities
+    Ui {
+        #[command(subcommand)]
+        action: UiAction,
+    },
+
+    /// Initialize config file at ~/.config/operator-jack/config.toml
+    Init,
+}
+
+#[derive(Subcommand)]
+enum UiAction {
+    /// Inspect the accessibility tree of an application
+    Inspect {
+        /// Application name
+        #[arg(long)]
+        app: String,
+
+        /// Maximum tree depth (default 5)
+        #[arg(long, default_value = "5")]
+        depth: u32,
+    },
 }
 
 #[derive(Subcommand)]
@@ -178,6 +202,10 @@ fn main() -> Result<()> {
         } => cmd_run(&cli, plan_file.clone(), instruction.clone()),
         Commands::Logs { ref run_id, full } => cmd_logs(&cli, run_id.clone(), *full),
         Commands::Stop => cmd_stop(&cli),
+        Commands::Ui { ref action } => match action {
+            UiAction::Inspect { ref app, depth } => cmd_ui_inspect(&cli, app, *depth),
+        },
+        Commands::Init => cmd_init(&cli),
     }
 }
 
@@ -241,8 +269,24 @@ fn cmd_doctor(cli: &Cli) -> Result<()> {
         "SKIPPED (helper not found)"
     };
 
+    // Detect first run (no config file exists).
+    let config_path = OperatorConfig::default_path();
+    let is_first_run = config_path.as_ref().map_or(true, |p| !p.exists());
+
+    // Detect terminal app for targeted accessibility instructions.
+    let terminal_app = std::env::var("TERM_PROGRAM").ok();
+    let terminal_display = match terminal_app.as_deref() {
+        Some("iTerm.app") => "iTerm2",
+        Some("Apple_Terminal") => "Terminal.app",
+        Some("vscode") => "Visual Studio Code",
+        Some("WarpTerminal") => "Warp",
+        Some(other) => other,
+        None => "your terminal app",
+    };
+
     if cli.json {
         let obj = serde_json::json!({
+            "version": env!("CARGO_PKG_VERSION"),
             "sqlite": sqlite_status,
             "log_dir": log_status,
             "helper": helper_status,
@@ -253,24 +297,55 @@ fn cmd_doctor(cli: &Cli) -> Result<()> {
             },
             "db_path": db_path.display().to_string(),
             "log_dir_path": log_dir.display().to_string(),
+            "first_run": is_first_run,
         });
         println!("{}", serde_json::to_string_pretty(&obj)?);
     } else {
-        println!("Operator Doctor");
-        println!("---------------");
+        if is_first_run {
+            println!("Welcome to Operator Jack!");
+            println!("========================");
+            println!();
+        } else {
+            println!("Operator Jack Doctor");
+            println!("====================");
+        }
+
+        println!("Version:       {}", env!("CARGO_PKG_VERSION"));
         println!("SQLite:        {}", sqlite_status);
         println!("Log dir:       {}", log_status);
         println!("Helper:        {}", helper_status);
         println!("Accessibility: {}", accessibility_status);
+
         if accessibility_status == "NOT GRANTED" {
             println!();
             println!("  To grant accessibility access:");
-            println!("  System Settings > Privacy & Security > Accessibility");
-            println!("  Add and enable the terminal application you use to run operator.");
+            println!("  1. Open System Settings > Privacy & Security > Accessibility");
+            println!("  2. Click '+' and add: {}", terminal_display);
+            println!("  3. Restart {} and run: operator-jack doctor", terminal_display);
         }
+
+        if !helper_found {
+            println!();
+            println!("  Helper binary not found. Install it:");
+            println!("    brew install rajkum2/tap/operator-jack");
+            println!("  Or build from source:");
+            println!("    cd macos-helper && swift build -c release");
+            println!("    cp .build/release/operator-macos-helper /usr/local/bin/");
+        }
+
+        if is_first_run {
+            println!();
+            println!("  Quick start:");
+            println!("    operator-jack init                  # Create config file");
+            println!("    operator-jack run --plan-file docs/examples/open-app.json --yes");
+        }
+
         println!();
         println!("DB path:  {}", db_path.display());
         println!("Log dir:  {}", log_dir.display());
+        if let Some(ref cp) = config_path {
+            println!("Config:   {}{}", cp.display(), if is_first_run { " (not yet created)" } else { "" });
+        }
     }
 
     Ok(())
@@ -741,6 +816,88 @@ fn cmd_stop(cli: &Cli) -> Result<()> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// cmd_ui_inspect — inspect accessibility tree
+// ---------------------------------------------------------------------------
+
+/// Connects to the macOS helper and dumps the accessibility tree for an app.
+fn cmd_ui_inspect(cli: &Cli, app: &str, depth: u32) -> Result<()> {
+    let helper_path = resolve_helper_path(cli)
+        .ok_or_else(|| anyhow::anyhow!("Helper binary not found. Run 'operator doctor' to check."))?;
+
+    let mut client =
+        operator_ipc::client::HelperClient::new(Some(helper_path.to_string_lossy().to_string()));
+    client.connect().context("failed to connect to helper")?;
+
+    let result = client.send(
+        "ui.inspect",
+        serde_json::json!({
+            "app": app,
+            "depth": depth,
+        }),
+    );
+    client.disconnect();
+
+    match result {
+        Ok(val) => {
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&val)?);
+            } else {
+                // Pretty-print the tree with indentation
+                let node_count = val
+                    .get("node_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                println!("Accessibility tree for \"{}\" ({} nodes, depth {}):", app, node_count, depth);
+                println!();
+                if let Some(tree) = val.get("tree") {
+                    print_ax_tree(tree, 0);
+                }
+            }
+            Ok(())
+        }
+        Err(e) => {
+            bail!("inspect failed: {}", e);
+        }
+    }
+}
+
+/// Recursively prints an AX tree node with indentation.
+fn print_ax_tree(node: &serde_json::Value, indent: usize) {
+    let prefix = "  ".repeat(indent);
+    let role = node.get("role").and_then(|v| v.as_str()).unwrap_or("?");
+    let name = node.get("name").and_then(|v| v.as_str());
+    let value = node.get("value").and_then(|v| v.as_str());
+    let identifier = node.get("identifier").and_then(|v| v.as_str());
+
+    let mut line = format!("{}{}", prefix, role);
+
+    if let Some(n) = name {
+        if !n.is_empty() {
+            line.push_str(&format!(" name=\"{}\"", n));
+        }
+    }
+    if let Some(v) = value {
+        if !v.is_empty() {
+            let display_val = if v.len() > 40 { &v[..40] } else { v };
+            line.push_str(&format!(" value=\"{}\"", display_val));
+        }
+    }
+    if let Some(id) = identifier {
+        if !id.is_empty() {
+            line.push_str(&format!(" id=\"{}\"", id));
+        }
+    }
+
+    println!("{}", line);
+
+    if let Some(children) = node.get("children").and_then(|v| v.as_array()) {
+        for child in children {
+            print_ax_tree(child, indent + 1);
+        }
+    }
+}
+
 // ===========================================================================
 // Helper functions
 // ===========================================================================
@@ -749,12 +906,12 @@ fn cmd_stop(cli: &Cli) -> Result<()> {
 // Path resolution
 // ---------------------------------------------------------------------------
 
-/// Returns the data directory: `$DATA_DIR/operator` (e.g.
-/// `~/Library/Application Support/operator` on macOS).
+/// Returns the data directory: `$DATA_DIR/operator-jack` (e.g.
+/// `~/Library/Application Support/operator-jack` on macOS).
 fn resolve_data_dir() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("operator")
+        .join("operator-jack")
 }
 
 /// Returns the log directory: `<data_dir>/logs`.
@@ -762,9 +919,9 @@ fn resolve_log_dir() -> PathBuf {
     resolve_data_dir().join("logs")
 }
 
-/// Returns the database path: `<data_dir>/operator.db`.
+/// Returns the database path: `<data_dir>/operator-jack.db`.
 fn resolve_db_path() -> PathBuf {
-    resolve_data_dir().join("operator.db")
+    resolve_data_dir().join("operator-jack.db")
 }
 
 // ---------------------------------------------------------------------------
@@ -794,12 +951,20 @@ fn read_plan_file(path: &Path) -> Result<Plan> {
 // Engine configuration
 // ---------------------------------------------------------------------------
 
-/// Builds an `EngineConfig` from the CLI arguments.
+/// Builds an `EngineConfig` from config file + env vars + CLI arguments.
+/// Precedence: config file < env vars < CLI flags.
 fn build_engine_config(cli: &Cli) -> Result<EngineConfig> {
+    // Load config file (defaults if missing, errors only on parse failures).
+    let cfg = OperatorConfig::load().unwrap_or_else(|e| {
+        tracing::warn!("failed to load config: {e}, using defaults");
+        OperatorConfig::default()
+    });
+
+    // CLI mode overrides config default_mode.
     let mode = parse_mode(&cli.mode)?;
 
     // Determine interactive mode: --interactive overrides, --no-interactive
-    // overrides, default is true (assume interactive terminal).
+    // overrides, config value, or detect TTY.
     let interactive = if cli.no_interactive {
         false
     } else if cli.interactive {
@@ -808,9 +973,23 @@ fn build_engine_config(cli: &Cli) -> Result<EngineConfig> {
         atty_is_interactive()
     };
 
-    let allow_apps = parse_comma_list(&cli.allow_apps);
-    let allow_domains = parse_comma_list(&cli.allow_domains);
-    let log_dir = resolve_log_dir();
+    // CLI allow_apps/allow_domains override config values.
+    let allow_apps = if cli.allow_apps.is_some() {
+        parse_comma_list(&cli.allow_apps)
+    } else {
+        cfg.allow_apps.clone()
+    };
+    let allow_domains = if cli.allow_domains.is_some() {
+        parse_comma_list(&cli.allow_domains)
+    } else {
+        cfg.allow_domains.clone()
+    };
+
+    let log_dir = if let Some(ref d) = cfg.log_dir {
+        PathBuf::from(d)
+    } else {
+        resolve_log_dir()
+    };
 
     // Resolve the helper path through all discovery mechanisms (CLI flag,
     // env var, PATH, sibling, dev fallback) instead of passing just the
@@ -826,9 +1005,9 @@ fn build_engine_config(cli: &Cli) -> Result<EngineConfig> {
         allow_domains,
         log_dir,
         helper_path,
-        default_timeout_ms: 30_000,
-        default_retries: 0,
-        default_backoff_ms: 1_000,
+        default_timeout_ms: cfg.default_step_timeout_ms,
+        default_retries: cfg.default_retries,
+        default_backoff_ms: cfg.default_retry_backoff_ms,
     })
 }
 
@@ -864,7 +1043,7 @@ fn parse_comma_list(s: &Option<String>) -> Vec<String> {
 /// Writes a PID file containing the current process ID and the associated
 /// run identifier. Format: `<pid>\n<run_id>\n`.
 fn write_pid_file(data_dir: &Path, run_id: &str) -> Result<()> {
-    let pid_path = data_dir.join("operator.pid");
+    let pid_path = data_dir.join("operator-jack.pid");
     let contents = format!("{}\n{}\n", std::process::id(), run_id);
     fs::write(&pid_path, contents)
         .with_context(|| format!("failed to write PID file: {}", pid_path.display()))?;
@@ -873,7 +1052,7 @@ fn write_pid_file(data_dir: &Path, run_id: &str) -> Result<()> {
 
 /// Removes the PID file if it exists.
 fn remove_pid_file(data_dir: &Path) -> Result<()> {
-    let pid_path = data_dir.join("operator.pid");
+    let pid_path = data_dir.join("operator-jack.pid");
     if pid_path.exists() {
         fs::remove_file(&pid_path)
             .with_context(|| format!("failed to remove PID file: {}", pid_path.display()))?;
@@ -884,7 +1063,7 @@ fn remove_pid_file(data_dir: &Path) -> Result<()> {
 /// Reads the PID file and returns `(pid, run_id)` if the file exists and
 /// is well-formed.
 fn read_pid_file(data_dir: &Path) -> Result<Option<(u32, String)>> {
-    let pid_path = data_dir.join("operator.pid");
+    let pid_path = data_dir.join("operator-jack.pid");
     if !pid_path.exists() {
         return Ok(None);
     }
@@ -1043,7 +1222,7 @@ fn resolve_helper_path(cli: &Cli) -> Option<PathBuf> {
     }
 
     // 5. Dev fallback: Swift build output relative to the executable.
-    //    When running from `target/debug/operator`, the helper lives at
+    //    When running from `target/debug/operator-jack`, the helper lives at
     //    `../../macos-helper/.build/{release,debug}/operator-macos-helper`.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -1161,4 +1340,30 @@ unsafe fn libc_signal(sig: i32, handler: SignalHandler) {
 #[cfg(not(unix))]
 unsafe fn libc_signal(_sig: i32, _handler: SignalHandler) {
     // Signal handling is only supported on Unix/macOS.
+}
+
+// ---------------------------------------------------------------------------
+// cmd_init — create default config file
+// ---------------------------------------------------------------------------
+
+fn cmd_init(_cli: &Cli) -> Result<()> {
+    let config_path = OperatorConfig::default_path()
+        .context("could not determine config directory")?;
+
+    if config_path.exists() {
+        eprintln!("Config file already exists: {}", config_path.display());
+        eprintln!("Edit it directly or delete it to regenerate.");
+        return Ok(());
+    }
+
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create config dir: {}", parent.display()))?;
+    }
+
+    fs::write(&config_path, OperatorConfig::default_toml())
+        .with_context(|| format!("failed to write config file: {}", config_path.display()))?;
+
+    eprintln!("Created config file: {}", config_path.display());
+    Ok(())
 }

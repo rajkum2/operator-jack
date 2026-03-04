@@ -1,10 +1,10 @@
-# Operator CLI
+# Operator Jack
 
-Operator is a local-first, privacy-respecting command-line tool for automating macOS tasks through structured JSON plans. It executes automation across three lanes -- system operations (files, processes, URLs), UI automation (macOS Accessibility API), and browser control (Chrome DevTools Protocol) -- with built-in policy gates, secret redaction, and an append-only audit log. Everything runs locally; there are no cloud calls, no telemetry, and no hidden background processes.
+Operator Jack is a local-first, privacy-respecting command-line tool for automating macOS tasks through structured JSON plans. It executes automation across three lanes -- system operations (files, processes, URLs), UI automation (macOS Accessibility API), and browser control (Chrome DevTools Protocol) -- with built-in policy gates, secret redaction, and an append-only audit log. Everything runs locally; there are no cloud calls, no telemetry, and no hidden background processes.
 
 ## Current Status
 
-**Milestone 2 (Swift Helper v1) is complete.** The workspace structure, core types, plan validation, SQLite store, CLI skeleton, all 13 `sys.*` executors, and the Swift macOS helper with real IPC are fully implemented with 73 tests passing. M3 (UI executor v1) is next.
+**Milestone 3 (UI Executor v1) is complete.** The workspace structure, core types, plan validation, SQLite store, CLI skeleton, all 13 `sys.*` executors, 15 UI handlers via Swift helper, and real IPC are fully implemented with 91 tests passing. M4 (rule-based planner) is next.
 
 ## Quick Start
 
@@ -12,43 +12,45 @@ Build the project:
 
 ```
 cargo build --release
+cd macos-helper && swift build -c release && cd ..
 ```
 
 Run the doctor command to check your environment:
 
 ```
-./target/release/operator doctor
+./target/release/operator-jack doctor
 ```
 
 Validate a plan file without executing it:
 
 ```
-./target/release/operator plan validate --plan-file docs/examples/open-app.json
+./target/release/operator-jack plan validate --plan-file docs/examples/open-app.json
 ```
 
 Execute a plan (the `--yes` flag auto-approves policy prompts):
 
 ```
-./target/release/operator run --plan-file docs/examples/file-operations.json --yes
+./target/release/operator-jack run --plan-file docs/examples/file-operations.json --yes
 ```
 
 Dry-run a plan to see what would happen without performing any actions:
 
 ```
-./target/release/operator run --plan-file docs/examples/file-operations.json --dry-run
+./target/release/operator-jack run --plan-file docs/examples/file-operations.json --dry-run
 ```
 
 ## CLI Commands
 
 | Command | Description |
 |---|---|
-| `operator run --plan-file <path>` | Execute a plan from a JSON file. |
-| `operator run --plan-file <path> --yes` | Execute with all policy prompts auto-approved. |
-| `operator run --plan-file <path> --dry-run` | Simulate execution without performing actions. |
-| `operator plan validate --plan-file <path>` | Validate a plan file and report errors. |
-| `operator plan list` | List previously executed plans from the store. |
-| `operator doctor` | Check environment: accessibility permission, helper binary, store. |
-| `operator stop` | Stop a running operator process (sends SIGTERM via PID file). |
+| `operator-jack run --plan-file <path>` | Execute a plan from a JSON file. |
+| `operator-jack run --plan-file <path> --yes` | Execute with all policy prompts auto-approved. |
+| `operator-jack run --plan-file <path> --dry-run` | Simulate execution without performing actions. |
+| `operator-jack plan validate --plan-file <path>` | Validate a plan file and report errors. |
+| `operator-jack plan list` | List previously executed plans from the store. |
+| `operator-jack doctor` | Check environment: accessibility permission, helper binary, store. |
+| `operator-jack stop` | Stop a running operator-jack process (sends SIGTERM via PID file). |
+| `operator-jack ui inspect --app <name>` | Dump the accessibility tree for an app. |
 
 ### Common Flags
 
@@ -83,12 +85,14 @@ More examples are available in [`docs/examples/`](docs/examples/):
 
 - [`open-app.json`](docs/examples/open-app.json) -- Open an application.
 - [`file-operations.json`](docs/examples/file-operations.json) -- Create folders, write files, read files back.
-- [`notes-automation.json`](docs/examples/notes-automation.json) -- Open Notes and create a new note with UI automation (requires M3).
+- [`notes-automation.json`](docs/examples/notes-automation.json) -- Open Notes and create a new note with UI automation.
 - [`chrome-search.json`](docs/examples/chrome-search.json) -- Open Chrome and navigate to a search URL.
+- [`calculator-buttons.json`](docs/examples/calculator-buttons.json) -- Click calculator buttons via UI automation.
+- [`full-end-to-end.json`](docs/examples/full-end-to-end.json) -- Complete end-to-end UI automation workflow.
 
 ## Project Structure
 
-Operator is organized as a Cargo workspace with six crates:
+Operator Jack is organized as a Cargo workspace with six crates:
 
 ```
 operator-jack/

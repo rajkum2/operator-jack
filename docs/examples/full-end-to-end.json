@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "name": "Full end-to-end UI automation",
+  "description": "Opens TextEdit, creates new document, types text, reads it back, navigates windows",
+  "mode": "unsafe",
+  "allow_apps": ["TextEdit"],
+  "steps": [
+    {
+      "id": "open_app",
+      "type": "sys.open_app",
+      "params": { "app": "TextEdit" }
+    },
+    {
+      "id": "focus",
+      "type": "ui.focus_app",
+      "params": { "app": "TextEdit" }
+    },
+    {
+      "id": "wait_ready",
+      "type": "ui.wait_for",
+      "params": {
+        "app": "TextEdit",
+        "selector": { "role": "AXWindow" },
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "list_wins",
+      "type": "ui.list_windows",
+      "params": { "app": "TextEdit" }
+    },
+    {
+      "id": "type_text",
+      "type": "ui.type_text",
+      "params": {
+        "app": "TextEdit",
+        "text": "Hello from Operator CLI end-to-end test!"
+      }
+    },
+    {
+      "id": "select_all",
+      "type": "ui.key_press",
+      "params": {
+        "app": "TextEdit",
+        "key": "a",
+        "modifiers": ["command"]
+      }
+    },
+    {
+      "id": "find_text_area",
+      "type": "ui.find",
+      "params": {
+        "app": "TextEdit",
+        "selector": { "role": "AXTextArea" }
+      }
+    },
+    {
+      "id": "read_text",
+      "type": "ui.read_text",
+      "params": {
+        "app": "TextEdit",
+        "selector": { "role": "AXTextArea" }
+      }
+    }
+  ]
+}

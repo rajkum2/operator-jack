@@ -1,10 +1,10 @@
-# Operator CLI Architecture
+# Operator Jack Architecture
 
 ## Overview
 
-Operator is a local-first, privacy-respecting CLI tool for automating macOS tasks through structured JSON plans. It bridges system-level operations (file I/O, process management, URL opening) with UI automation (accessibility-based element interaction) and browser control (Chrome DevTools Protocol).
+Operator Jack is a local-first, privacy-respecting CLI tool for automating macOS tasks through structured JSON plans. It bridges system-level operations (file I/O, process management, URL opening) with UI automation (accessibility-based element interaction) and browser control (Chrome DevTools Protocol).
 
-Operator uses a **three-lane execution model**:
+Operator Jack uses a **three-lane execution model**:
 
 1. **System lane (`sys.*`)** -- File operations, process launching, shell-free command execution. Available from M1.
 2. **UI lane (`ui.*`)** -- macOS Accessibility-based interaction: finding elements, clicking, typing, menu selection. Available from M3.
@@ -189,7 +189,7 @@ The `--yes` flag auto-approves all prompts (equivalent to piping `yes`). In **no
 
 ## IPC Protocol (M2+)
 
-Operator communicates with a Swift helper binary (`macos-helper`) over stdio using **NDJSON** (newline-delimited JSON). Each message is a single JSON object terminated by `\n`.
+Operator Jack communicates with a Swift helper binary (`macos-helper`) over stdio using **NDJSON** (newline-delimited JSON). Each message is a single JSON object terminated by `\n`.
 
 ### Request Format
 
@@ -220,7 +220,7 @@ The IPC manager in `operator-ipc` handles:
 
 ### SQLite Schema
 
-The `operator-store` crate manages a SQLite database at `~/.operator/operator.db` with the following tables:
+The `operator-store` crate manages a SQLite database at `~/Library/Application Support/operator-jack/operator-jack.db` with the following tables:
 
 **plans**
 | Column | Type | Description |
@@ -265,7 +265,7 @@ The `operator-store` crate manages a SQLite database at `~/.operator/operator.db
 
 ### JSONL Audit Log
 
-In addition to SQLite, every significant event is appended to `~/.operator/audit.jsonl`. This file is append-only and never truncated by operator. Each line is a self-contained JSON object:
+In addition to SQLite, every significant event is appended to the run-specific JSONL log. This file is append-only and never truncated by Operator Jack. Each line is a self-contained JSON object:
 
 ```json
 {"ts":"2025-06-15T10:30:00Z","event":"step_end","run_id":"...","step_id":"write_file","status":"success","duration_ms":12}
@@ -273,7 +273,7 @@ In addition to SQLite, every significant event is appended to `~/.operator/audit
 
 ## Redaction
 
-Before any output is stored or displayed, operator applies redaction rules to prevent secret leakage.
+Before any output is stored or displayed, Operator Jack applies redaction rules to prevent secret leakage.
 
 ### Key-Name Matching
 

@@ -1,4 +1,4 @@
-# Operator CLI — Project Context & Session Resume File
+# Operator Jack — Project Context & Session Resume File
 
 > **Purpose:** This file is the single source of truth for resuming work across sessions.
 > Any AI assistant (or human) should read THIS FILE FIRST before doing anything.
@@ -9,17 +9,17 @@
 ## Quick Start (For New Session)
 
 1. Read this file completely
-2. Read the active spec: `SPEC_FREEZE_V0.2.md`
+2. Read the active spec: `SPEC_FREEZE_V0.3.md` (additive delta) + `SPEC_FREEZE_V0.2.md` (base)
 3. Check `VERSION_LOG` below for what changed last
 4. Check `CURRENT_STATE` below for what's built vs pending
 5. Check `NEXT_ACTIONS` for what to do next
-6. If code exists, verify it builds: `cd operator && cargo build`
+6. If code exists, verify it builds: `cd operator-jack && cargo build`
 
 ---
 
 ## Project Identity
 
-- **Name:** Operator CLI (`operator`)
+- **Name:** Operator Jack (`operator-jack`)
 - **What:** macOS-first CLI tool for deterministic computer automation
 - **Architecture:** Instruction → Plan (typed JSON steps) → Policy Gate → Executors → Logs → Result
 - **Three execution lanes:** System (Rust), UI/Accessibility (Swift helper via IPC), Browser/CDP (future)
@@ -33,18 +33,21 @@
 | File | Purpose |
 |------|---------|
 | `PROJECT_CONTEXT.md` | THIS FILE — resume context, version log, state tracker |
-| `SPEC_FREEZE_V0.2.md` | Active normative spec (frozen contract for M0-M3) |
+| `SPEC_FREEZE_V0.3.md` | Active spec additive delta for M3 (new step types, window scoping, error taxonomy) |
+| `SPEC_FREEZE_V0.2.md` | Base normative spec (frozen contract for M0-M3) |
 | `SPEC_FREEZE_V0.1.md` | Previous spec version (archived, do not implement from) |
-| `operator/` | Rust workspace root (when created) |
-| `operator/crates/operator-cli/` | CLI binary (clap) |
-| `operator/crates/operator-core/` | Types, validation, interpolation, redaction |
-| `operator/crates/operator-runtime/` | Execution loop, policy gates, retry/timeout |
-| `operator/crates/operator-store/` | SQLite persistence (rusqlite) |
-| `operator/crates/operator-exec-system/` | sys.* step handlers |
-| `operator/crates/operator-ipc/` | NDJSON IPC client for Swift helper |
-| `operator/macos-helper/` | Swift SPM package for AX automation |
-| `operator/docs/` | Architecture, security, selectors, permissions, roadmap |
-| `operator/docs/examples/` | Example plan JSON files |
+| `crates/operator-cli/` | CLI binary (`operator-jack`, clap) |
+| `crates/operator-core/` | Types, validation, interpolation, redaction, config |
+| `crates/operator-runtime/` | Execution loop, policy gates, retry/timeout |
+| `crates/operator-store/` | SQLite persistence (rusqlite) |
+| `crates/operator-exec-system/` | sys.* step handlers |
+| `crates/operator-ipc/` | NDJSON IPC client for Swift helper |
+| `macos-helper/` | Swift SPM package for AX automation |
+| `docs/` | Architecture, security, selectors, permissions, roadmap |
+| `docs/examples/` | Example plan JSON files |
+| `Makefile` | Build automation (build, test, install, universal) |
+| `.github/workflows/` | CI (test/lint) + Release (universal binaries) |
+| `homebrew/` | Homebrew formula template |
 
 ---
 
@@ -67,6 +70,49 @@
 ---
 
 ## VERSION_LOG
+
+### v0.4.0 — 2026-03-04
+**Status:** Phase A complete. Production packaging & distribution. Binary renamed to `operator-jack`. 96 tests pass (5 new config tests).
+**Changes (Phase A):**
+1. Renamed binary from `operator` to `operator-jack` (Cargo.toml, clap, data dirs, PID files, DB name)
+2. Added config file system: `~/.config/operator-jack/config.toml` with TOML parsing, env var overrides, `operator-jack init` command
+3. Added Makefile with targets: build, build-release, test, lint, clean, install, uninstall, universal
+4. Added GitHub Actions CI: ci.yml (test/lint on push/PR) + release.yml (universal binaries + GitHub Release on tag)
+5. Added Homebrew tap formula template in `homebrew/operator-jack.rb`
+6. Added `install.sh` script for non-Homebrew users
+7. Created LICENSE (MIT), CHANGELOG.md (retrospective M0-M3), CONTRIBUTING.md
+8. Enhanced `operator-jack doctor`: first-run detection, terminal-specific accessibility instructions, version display, config path info, helper install guidance
+9. Updated all documentation: README.md, CLAUDE.md, ARCHITECTURE.md, SECURITY.md, PERMISSIONS_MACOS.md, ROADMAP.md, PROJECT_CONTEXT.md
+
+### v0.3.1 — 2026-03-03
+**Status:** M3 complete (M3a + M3b). Full UI executor v1. 91 tests pass. Swift helper has 15 handlers.
+**Changes (M3b):**
+1. Implemented `ui.selectMenu` handler — menu bar navigation with submenu polling
+2. Implemented `ui.setValue` handler — AX value setting with settability check and read-back verification
+3. Implemented `ui.inspect` handler — recursive AX tree dump with configurable depth
+4. Added `operator ui inspect --app <name> --depth N` CLI command with pretty-printed tree output
+5. Added `anyOf` selectors — fallback locator stack (Rust validation + Swift resolution, first exact match wins)
+6. Added `element_ref` system — ULID-keyed AXUIElement cache in Swift, returned by `ui.find`, accepted by click/readText/setValue; falls back to selector re-resolution when stale
+7. Updated Rust validation: `selector` optional when `element_ref` provided for click, readText, setValue
+8. Added evidence hooks — `gatherEvidence()` returns `_evidence` key on all action handler outputs (active app, window, element subtree)
+9. Added 6 new Rust tests: anyOf validation (5), element_ref validation (1); total 91 tests
+10. Created 3 new acceptance test plans: select-menu-test, element-ref-reuse, full-end-to-end; total 11 golden plans
+11. Created CLAUDE.md — project conventions, build instructions, handler registry, architecture guide
+
+### v0.3.0 — 2026-03-03
+**Status:** M3a complete. UI executor v1 core. 85 tests pass (12 new). Swift helper has 12 handlers.
+**Changes (M3a):**
+1. Created SPEC_FREEZE_V0.3.md — additive delta documenting all M3 additions (new step types, window scoping, error taxonomy, implicit waits, disambiguation)
+2. Added `ui.list_windows` and `ui.focus_window` StepType variants in Rust (types, validation, policy, IPC translation)
+3. Added `WindowScope` struct to Selector with `index`/`title_contains` (mutually exclusive validation)
+4. Added `details: Option<serde_json::Value>` to `IpcError::HelperError` for structured error metadata
+5. Created `AXUtilities.swift` (~350 lines): shared foundation for all UI handlers — app resolution, AX wrappers, window enumeration, selector matching engine (DFS traversal), implicit waits, disambiguation, element serialization
+6. Implemented 9 Swift handlers: `ui.focusApp`, `ui.listWindows`, `ui.focusWindow`, `ui.find`, `ui.waitFor`, `ui.click`, `ui.typeText`, `ui.readText`, `ui.keyPress`
+7. Added interactive disambiguation UX in Rust engine — intercepts ELEMENT_AMBIGUOUS errors, displays candidates, lets user choose index
+8. Made ELEMENT_AMBIGUOUS non-retryable (requires user disambiguation, not blind retry)
+9. Added 12 new Rust unit tests: selector window scope (6), policy (2), validation (4)
+10. Created 5 acceptance test plans: calculator-buttons, notes-create-m3, system-settings-nav, multi-window, disambiguation-test
+11. All 85 Rust tests passing, Swift helper builds clean
 
 ### v0.2.3 — 2026-02-20
 **Status:** M2 complete. Swift helper v1 with real IPC. 73 tests pass.
@@ -157,10 +203,15 @@
 - [x] operator-runtime: execution engine, policy gates, JSONL logging
 - [x] operator-cli: all commands (doctor, plan, exec, run, logs, stop)
 - [x] Documentation: ARCHITECTURE.md, SECURITY.md, SELECTORS.md, PERMISSIONS_MACOS.md, ROADMAP.md
-- [x] Example plans: open-app.json, file-operations.json, notes-automation.json, chrome-search.json
+- [x] Example plans: 11 golden plans in docs/examples/ (open-app, file-operations, notes-automation, chrome-search, calculator-buttons, notes-create-m3, system-settings-nav, multi-window, disambiguation-test, select-menu-test, element-ref-reuse, full-end-to-end)
 - [x] README.md
-- [x] Swift helper (M2): NDJSON server, ping, accessibility check, listApps
+- [x] CLAUDE.md — project conventions, build instructions, handler registry
+- [x] Swift helper (M3): NDJSON server, 15 handlers (ping, accessibility, listApps, focusApp, listWindows, focusWindow, find, waitFor, click, typeText, readText, keyPress, selectMenu, setValue, inspect)
+- [x] AXUtilities.swift: shared AX foundation (app resolution, window scoping, selector matching, implicit waits, disambiguation, anyOf resolution, element_ref store, evidence gathering)
 - [x] Real system executor implementations (M1) — all 13 sys.* types working
+- [x] Rust-side disambiguation UX for ELEMENT_AMBIGUOUS (interactive candidate selection)
+- [x] `operator-jack ui inspect` CLI command for AX tree debugging
+- [x] Phase A: production packaging (binary rename, config, Makefile, CI, Homebrew formula, install script, LICENSE, CHANGELOG, CONTRIBUTING, enhanced doctor)
 
 ### Milestone Status
 
@@ -169,7 +220,9 @@
 | M0 | DONE | Scaffolding: workspace, types, store, CLI skeleton, stub executors, logging |
 | M1 | DONE | System executor: sys.* handlers, policy gates, --dry-run, --yes |
 | M2 | DONE | Swift helper v1: IPC server, ping, accessibility check, listApps |
-| M3 | NOT STARTED | UI executor v1: find/click/setValue, selector matching, menu selection |
+| M3a | DONE | UI executor v1 core: focusApp/Window, find, waitFor, click, typeText, readText, keyPress, disambiguation |
+| M3b | DONE | UI executor v1 polish: selectMenu, setValue, inspect, anyOf selectors, element_ref, evidence hooks |
+| Phase A | DONE | Production packaging: binary rename, config system, Makefile, CI, Homebrew, install script, LICENSE, CHANGELOG, enhanced doctor |
 | M4 | NOT STARTED | Rule-based planner (natural language → typed steps) |
 | M5 | NOT STARTED | Browser executor (CDP) |
 | M6 | NOT STARTED | Skills system (macros) |
@@ -180,20 +233,15 @@
 
 ## NEXT_ACTIONS
 
-**Immediate next step: Build M3 (UI Executor v1)**
+**Immediate next steps (in order):**
 
-M3 deliverables (from spec Section 23):
-1. `ui.find` — find elements using selector matching against the accessibility tree
-2. `ui.click` — click a UI element
-3. `ui.set_value` — set text field value via AX API
-4. `ui.type_text` — type text via CGEvent keystrokes
-5. `ui.key_press` — simulate key presses
-6. `ui.select_menu` — navigate application menus
-7. `ui.wait_for` — wait for element to appear
-8. `ui.read_text` — read element value
-9. Selector matching engine in Swift helper
+1. **Push to GitHub + tag v0.4.0** — trigger CI and first release
+2. **Create `rajkum2/homebrew-tap` repo** — publish the formula with release tarball SHA256
+3. **Build M4 (Rule-based Planner)** — `operator-jack do "open Notes and type hello"`
+4. **Build M6 (Skills System)** — `operator-jack skill run daily-standup --param title="Sprint 42"`
+5. **Build M5 (Browser/CDP)** — Chrome automation via DevTools Protocol
 
-**Before starting M3:** Ask user for confirmation.
+**Before starting M4:** Ask user for confirmation and scope discussion.
 
 ---
 
@@ -208,7 +256,7 @@ M3 deliverables (from spec Section 23):
 7. **Append-only audit log.** Every step gets logged with timestamp, params, result.
 8. **Redact before logging.** Apply redaction rules from spec Section 18.
 9. **ULIDs everywhere.** For plan_id, run_id, step_result_id, event_id, IPC message id.
-10. **XDG paths.** Use `dirs` crate. Config in `~/.config/operator/`, data in `~/.local/share/operator/`.
+10. **XDG paths.** Use `dirs` crate. Config in `~/.config/operator-jack/`, data in `~/Library/Application Support/operator-jack/`.
 
 ---
 
@@ -242,4 +290,4 @@ When multiple AX elements match and no `index` is given: interactive mode prompt
 
 ---
 
-*Last updated: 2026-02-20 — M2 COMPLETE. Swift helper v1 with real IPC, 73 tests pass, integration tests pass. Ready for M3.*
+*Last updated: 2026-03-04 — Phase A COMPLETE. Binary renamed to `operator-jack`. Production packaging: config system, Makefile, CI, Homebrew formula, install script, LICENSE, CHANGELOG, enhanced doctor. 96 Rust tests pass. Ready for M4.*

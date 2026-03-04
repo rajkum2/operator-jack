@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "operator"
+name = "operator-jack"
 path = "src/main.rs"
 
 [dependencies]

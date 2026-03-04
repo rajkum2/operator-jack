@@ -506,6 +506,16 @@ impl Engine {
                     timeout_ms,
                 );
 
+                // M3: Intercept ELEMENT_AMBIGUOUS for interactive disambiguation
+                let exec_result = maybe_disambiguate(
+                    exec_result,
+                    self.config.interactive,
+                    &step.step_type,
+                    &interpolated_params,
+                    &mut helper,
+                    timeout_ms,
+                );
+
                 match exec_result {
                     Ok(output) => {
                         // Update step result: succeeded
@@ -636,6 +646,16 @@ impl Engine {
                         );
 
                         let retry_result = execute_with_timeout(
+                            &step.step_type,
+                            &interpolated_params,
+                            &mut helper,
+                            timeout_ms,
+                        );
+
+                        // M3: Apply disambiguation on retry path too
+                        let retry_result = maybe_disambiguate(
+                            retry_result,
+                            self.config.interactive,
                             &step.step_type,
                             &interpolated_params,
                             &mut helper,
@@ -833,9 +853,140 @@ fn execute_with_timeout(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Interactive disambiguation for ELEMENT_AMBIGUOUS
+// ---------------------------------------------------------------------------
+
+/// If the result is an `ELEMENT_AMBIGUOUS` error and the session is interactive,
+/// display the candidates to the user on stderr and let them choose. Then re-send
+/// the IPC call with `selector.index` set to the chosen candidate.
+///
+/// In non-interactive mode the error is returned as-is.
+fn maybe_disambiguate(
+    result: Result<serde_json::Value, RuntimeError>,
+    interactive: bool,
+    step_type: &StepType,
+    params: &serde_json::Value,
+    helper: &mut Option<HelperClient>,
+    timeout_ms: u64,
+) -> Result<serde_json::Value, RuntimeError> {
+    let err = match result {
+        Ok(v) => return Ok(v),
+        Err(e) => e,
+    };
+
+    // Check if this is specifically an ELEMENT_AMBIGUOUS helper error
+    let (code, details) = match &err {
+        RuntimeError::Ipc(operator_ipc::IpcError::HelperError {
+            code,
+            details,
+            ..
+        }) => (code.as_str(), details.clone()),
+        _ => return Err(err),
+    };
+
+    if code != "ELEMENT_AMBIGUOUS" {
+        return Err(err);
+    }
+
+    if !interactive {
+        return Err(err);
+    }
+
+    // Extract candidates from error details
+    let candidates = details
+        .as_ref()
+        .and_then(|d| d.get("candidates"))
+        .and_then(|c| c.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    if candidates.is_empty() {
+        return Err(err);
+    }
+
+    // Display disambiguation prompt on stderr
+    let app_name = params
+        .get("app")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown app");
+
+    eprintln!();
+    eprintln!(
+        "Multiple UI matches for selector in app \"{}\":",
+        app_name
+    );
+
+    for (i, candidate) in candidates.iter().enumerate() {
+        let role = candidate
+            .get("role")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let name = candidate
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let path = candidate
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let name_display = if name.is_empty() {
+            String::new()
+        } else {
+            format!(" name=\"{}\"", name)
+        };
+
+        eprintln!(
+            "  {}) {}{} path=\"{}\"",
+            i + 1,
+            role,
+            name_display,
+            path
+        );
+    }
+
+    eprint!(
+        "Choose [1-{}] or q to abort: ",
+        candidates.len()
+    );
+
+    // Read user choice from stdin
+    let mut input = String::new();
+    if std::io::stdin().read_line(&mut input).is_err() {
+        return Err(err);
+    }
+
+    let input = input.trim();
+    if input.eq_ignore_ascii_case("q") || input.eq_ignore_ascii_case("quit") {
+        return Err(RuntimeError::Cancelled);
+    }
+
+    let chosen: usize = match input.parse::<usize>() {
+        Ok(n) if n >= 1 && n <= candidates.len() => n - 1,
+        _ => {
+            eprintln!("Invalid choice, aborting disambiguation.");
+            return Err(err);
+        }
+    };
+
+    // Re-send with selector.index set to the chosen candidate index
+    let mut new_params = params.clone();
+    if let Some(selector) = new_params.get_mut("selector") {
+        if let Some(obj) = selector.as_object_mut() {
+            obj.insert("index".to_string(), json!(chosen));
+        }
+    }
+
+    eprintln!("Re-sending with index {}...", chosen);
+
+    execute_with_timeout(step_type, &new_params, helper, timeout_ms)
+}
+
 /// Determines whether an error is retryable. Validation errors,
 /// interpolation errors, and policy errors are not retryable.
 /// Execution errors (timeouts, process failures, IPC errors) are retryable.
+/// ELEMENT_AMBIGUOUS is not retryable (requires disambiguation, not retry).
 fn is_retryable_error(err: &RuntimeError) -> bool {
     match err {
         RuntimeError::Validation(_) => false,
@@ -843,7 +994,14 @@ fn is_retryable_error(err: &RuntimeError) -> bool {
         RuntimeError::PolicyDenied(_) => false,
         RuntimeError::Store(_) => false,
         RuntimeError::SystemExec(_) => true,
-        RuntimeError::Ipc(_) => true,
+        RuntimeError::Ipc(ipc_err) => {
+            // ELEMENT_AMBIGUOUS needs user disambiguation, not blind retry
+            if let operator_ipc::IpcError::HelperError { code, .. } = ipc_err {
+                code != "ELEMENT_AMBIGUOUS"
+            } else {
+                true
+            }
+        }
         RuntimeError::Cancelled => false,
         RuntimeError::Other(msg) => {
             // Timeouts are retryable

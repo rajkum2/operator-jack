@@ -1,19 +1,19 @@
-# macOS Permissions for Operator CLI
+# macOS Permissions for Operator Jack
 
 ## Why Accessibility Permission Is Needed
 
-Operator uses the macOS Accessibility API (`AXUIElement`) to interact with application interfaces -- finding buttons, reading text, clicking elements, and typing. This API is gated behind the **Accessibility** permission in macOS Privacy & Security settings.
+Operator Jack uses the macOS Accessibility API (`AXUIElement`) to interact with application interfaces -- finding buttons, reading text, clicking elements, and typing. This API is gated behind the **Accessibility** permission in macOS Privacy & Security settings.
 
 Without this permission, all `ui.*` step types will fail because the system blocks access to other applications' UI element trees.
 
-System-level steps (`sys.*`) that only perform file operations, process management, and URL opening do **not** require Accessibility permission. You can use operator for file automation without granting this permission.
+System-level steps (`sys.*`) that only perform file operations, process management, and URL opening do **not** require Accessibility permission. You can use operator-jack for file automation without granting this permission.
 
 ## Checking Permission Status
 
 Run the built-in doctor command to check whether Accessibility permission is granted:
 
 ```
-operator doctor
+operator-jack doctor
 ```
 
 This command asks the macOS helper to call `AXIsProcessTrusted()` and reports the result. You will see one of:
@@ -32,9 +32,9 @@ Accessibility: NOT granted
 
 ## Which Application Needs Permission
 
-A common source of confusion: the **terminal application** you are using needs the permission, not the `operator` binary or the `macos-helper` binary.
+A common source of confusion: the **terminal application** you are using needs the permission, not the `operator-jack` binary or the `macos-helper` binary.
 
-This is because macOS grants Accessibility permission to the process at the top of the process tree that owns the window. When you run `operator` from Terminal.app, it is Terminal.app that macOS checks for permission.
+This is because macOS grants Accessibility permission to the process at the top of the process tree that owns the window. When you run `operator-jack` from Terminal.app, it is Terminal.app that macOS checks for permission.
 
 ### Common Terminal Applications
 
@@ -48,7 +48,7 @@ This is because macOS grants Accessibility permission to the process at the top 
 | WezTerm | `org.wezfurlong.wezterm` |
 | VS Code integrated terminal | `com.microsoft.VSCode` |
 
-Grant permission to whichever terminal you use to run operator.
+Grant permission to whichever terminal you use to run operator-jack.
 
 ## Step-by-Step: Granting Accessibility Permission
 
@@ -84,7 +84,7 @@ Grant permission to whichever terminal you use to run operator.
 After granting permission and restarting your terminal, verify by running:
 
 ```
-operator doctor
+operator-jack doctor
 ```
 
 You should see:
@@ -104,7 +104,7 @@ If it still shows "NOT granted", see the Troubleshooting section below.
 
 ### Permission Was Revoked After macOS Update
 
-macOS sometimes resets Accessibility permissions after a major OS update. If `operator doctor` reports "NOT granted" after updating macOS:
+macOS sometimes resets Accessibility permissions after a major OS update. If `operator-jack doctor` reports "NOT granted" after updating macOS:
 
 1. Open System Settings > Privacy & Security > Accessibility.
 2. Remove your terminal app from the list (select it, click the **-** button).
@@ -113,9 +113,9 @@ macOS sometimes resets Accessibility permissions after a major OS update. If `op
 
 ### Multiple Terminal Apps Listed
 
-If you have multiple terminal apps in the Accessibility list, ensure the one you are actually using has its toggle enabled. Having Terminal.app enabled does not help if you are running operator from iTerm2.
+If you have multiple terminal apps in the Accessibility list, ensure the one you are actually using has its toggle enabled. Having Terminal.app enabled does not help if you are running operator-jack from iTerm2.
 
-### "operator doctor" Says "Helper Not Found"
+### "operator-jack doctor" Says "Helper Not Found"
 
 This means the macOS helper binary is not installed or not in the expected location. The helper is built separately from the Rust CLI:
 
@@ -124,11 +124,11 @@ cd macos-helper
 swift build -c release
 ```
 
-The built binary must be accessible to operator at runtime. See the project README for setup instructions.
+The built binary must be accessible to operator-jack at runtime. See the project README for setup instructions.
 
 ### Running from SSH or a Remote Session
 
-Accessibility permission requires a window server connection. If you are running operator over SSH, there is no GUI session and Accessibility API calls will fail regardless of permission settings. UI automation steps require a local GUI session.
+Accessibility permission requires a window server connection. If you are running operator-jack over SSH, there is no GUI session and Accessibility API calls will fail regardless of permission settings. UI automation steps require a local GUI session.
 
 ### Automation Permission (Separate from Accessibility)
 

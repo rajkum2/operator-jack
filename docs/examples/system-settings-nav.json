@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "name": "System Settings navigation",
+  "description": "Opens System Settings, waits for window, finds and clicks General",
+  "mode": "unsafe",
+  "allow_apps": ["System Settings"],
+  "steps": [
+    {
+      "id": "open_settings",
+      "type": "sys.open_app",
+      "params": { "app": "System Settings" }
+    },
+    {
+      "id": "wait_window",
+      "type": "ui.wait_for",
+      "params": {
+        "app": "System Settings",
+        "selector": { "role": "AXWindow" },
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "find_general",
+      "type": "ui.find",
+      "params": {
+        "app": "System Settings",
+        "selector": { "name_contains": "General" }
+      }
+    },
+    {
+      "id": "click_general",
+      "type": "ui.click",
+      "params": {
+        "app": "System Settings",
+        "selector": { "name": "General" }
+      }
+    }
+  ]
+}

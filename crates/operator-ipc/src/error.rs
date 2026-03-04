@@ -17,5 +17,9 @@ pub enum IpcError {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
     #[error("Helper returned error: {code}: {message}")]
-    HelperError { code: String, message: String },
+    HelperError {
+        code: String,
+        message: String,
+        details: Option<serde_json::Value>,
+    },
 }

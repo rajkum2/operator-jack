@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "name": "Select menu test",
+  "description": "Opens TextEdit and selects File > New from the menu bar",
+  "mode": "unsafe",
+  "allow_apps": ["TextEdit"],
+  "steps": [
+    {
+      "id": "open_textedit",
+      "type": "sys.open_app",
+      "params": { "app": "TextEdit" }
+    },
+    {
+      "id": "wait_window",
+      "type": "ui.wait_for",
+      "params": {
+        "app": "TextEdit",
+        "selector": { "role": "AXWindow" },
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "focus_app",
+      "type": "ui.focus_app",
+      "params": { "app": "TextEdit" }
+    },
+    {
+      "id": "select_new",
+      "type": "ui.select_menu",
+      "params": {
+        "app": "TextEdit",
+        "menu_path": ["File", "New"]
+      }
+    }
+  ]
+}

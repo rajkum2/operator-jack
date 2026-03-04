@@ -77,12 +77,12 @@ struct IpcResponse: Codable {
         IpcResponse(id: id, ok: true, result: result, error: nil)
     }
 
-    static func failure(id: String, code: String, message: String, retryable: Bool = false) -> IpcResponse {
+    static func failure(id: String, code: String, message: String, retryable: Bool = false, details: [String: JSONValue] = [:]) -> IpcResponse {
         IpcResponse(
             id: id,
             ok: false,
             result: nil,
-            error: IpcErrorPayload(code: code, message: message, retryable: retryable)
+            error: IpcErrorPayload(code: code, message: message, retryable: retryable, details: details)
         )
     }
 }
@@ -93,4 +93,12 @@ struct IpcErrorPayload: Codable {
     let code: String
     let message: String
     let retryable: Bool
+    let details: [String: JSONValue]
+
+    init(code: String, message: String, retryable: Bool, details: [String: JSONValue] = [:]) {
+        self.code = code
+        self.message = message
+        self.retryable = retryable
+        self.details = details
+    }
 }

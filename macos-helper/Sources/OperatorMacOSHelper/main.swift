@@ -14,6 +14,18 @@ var dispatcher = MethodDispatcher()
 dispatcher.register("ui.ping", handler: handlePing)
 dispatcher.register("ui.checkAccessibilityPermission", handler: handleCheckAccessibility)
 dispatcher.register("ui.listApps", handler: handleListApps)
+dispatcher.register("ui.focusApp", handler: handleFocusApp)
+dispatcher.register("ui.listWindows", handler: handleListWindows)
+dispatcher.register("ui.focusWindow", handler: handleFocusWindow)
+dispatcher.register("ui.find", handler: handleFind)
+dispatcher.register("ui.waitFor", handler: handleWaitFor)
+dispatcher.register("ui.click", handler: handleClick)
+dispatcher.register("ui.typeText", handler: handleTypeText)
+dispatcher.register("ui.readText", handler: handleReadText)
+dispatcher.register("ui.keyPress", handler: handleKeyPress)
+dispatcher.register("ui.selectMenu", handler: handleSelectMenu)
+dispatcher.register("ui.setValue", handler: handleSetValue)
+dispatcher.register("ui.inspect", handler: handleInspect)
 
 // ---------------------------------------------------------------------------
 // JSON encoder/decoder

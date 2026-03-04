@@ -160,11 +160,11 @@ pub fn validate_step_params(
         }
         StepType::UiClick => {
             require_string_param(params, "app")?;
-            require_object_param(params, "selector")
+            require_selector_or_element_ref(params)
         }
         StepType::UiSetValue => {
             require_string_param(params, "app")?;
-            require_object_param(params, "selector")?;
+            require_selector_or_element_ref(params)?;
             require_string_param(params, "value")
         }
         StepType::UiTypeText => {
@@ -177,7 +177,7 @@ pub fn validate_step_params(
         }
         StepType::UiReadText => {
             require_string_param(params, "app")?;
-            require_object_param(params, "selector")
+            require_selector_or_element_ref(params)
         }
         StepType::UiWaitFor => {
             require_string_param(params, "app")?;
@@ -186,6 +186,11 @@ pub fn validate_step_params(
         StepType::UiSelectMenu => {
             require_string_param(params, "app")?;
             require_array_param(params, "menu_path")
+        }
+        StepType::UiListWindows => require_string_param(params, "app"),
+        StepType::UiFocusWindow => {
+            require_string_param(params, "app")?;
+            require_object_param(params, "window")
         }
     }
 }
@@ -207,6 +212,18 @@ fn require_object_param(params: &serde_json::Value, key: &str) -> Result<(), Str
         Some(serde_json::Value::Object(_)) => Ok(()),
         Some(_) => Err(format!("param '{}' must be an object", key)),
         None => Err(format!("missing required param '{}'", key)),
+    }
+}
+
+/// Requires either a `selector` object or an `element_ref` string param.
+fn require_selector_or_element_ref(params: &serde_json::Value) -> Result<(), String> {
+    let has_selector = matches!(params.get("selector"), Some(serde_json::Value::Object(_)));
+    let has_element_ref = matches!(params.get("element_ref"), Some(serde_json::Value::String(_)));
+
+    if has_selector || has_element_ref {
+        Ok(())
+    } else {
+        Err("missing required 'selector' (object) or 'element_ref' (string) param".to_string())
     }
 }
 
@@ -307,5 +324,94 @@ fn extract_step_id_from_path(path: &str) -> Option<String> {
         Some(parts[1].to_string())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_list_windows_requires_app() {
+        let result = validate_step_params(&StepType::UiListWindows, &json!({}));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("app"));
+
+        let result = validate_step_params(&StepType::UiListWindows, &json!({"app": "Finder"}));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_focus_window_requires_app_and_window() {
+        // Missing both
+        let result = validate_step_params(&StepType::UiFocusWindow, &json!({}));
+        assert!(result.is_err());
+
+        // Missing window
+        let result = validate_step_params(&StepType::UiFocusWindow, &json!({"app": "Finder"}));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("window"));
+
+        // Valid
+        let result = validate_step_params(
+            &StepType::UiFocusWindow,
+            &json!({"app": "Finder", "window": {"index": 0}}),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_focus_window_window_must_be_object() {
+        let result = validate_step_params(
+            &StepType::UiFocusWindow,
+            &json!({"app": "Finder", "window": "main"}),
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("object"));
+    }
+
+    #[test]
+    fn test_ui_click_requires_app_and_selector() {
+        let result = validate_step_params(&StepType::UiClick, &json!({"app": "Finder"}));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("selector"));
+
+        let result = validate_step_params(
+            &StepType::UiClick,
+            &json!({"app": "Finder", "selector": {"role": "AXButton"}}),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_element_ref_accepted_instead_of_selector() {
+        // click with element_ref instead of selector
+        let result = validate_step_params(
+            &StepType::UiClick,
+            &json!({"app": "Finder", "element_ref": "01234567890ABCDEF"}),
+        );
+        assert!(result.is_ok());
+
+        // readText with element_ref
+        let result = validate_step_params(
+            &StepType::UiReadText,
+            &json!({"app": "Finder", "element_ref": "01234567890ABCDEF"}),
+        );
+        assert!(result.is_ok());
+
+        // setValue with element_ref + value
+        let result = validate_step_params(
+            &StepType::UiSetValue,
+            &json!({"app": "Finder", "element_ref": "01234567890ABCDEF", "value": "hello"}),
+        );
+        assert!(result.is_ok());
+
+        // click with neither selector nor element_ref should fail
+        let result = validate_step_params(
+            &StepType::UiClick,
+            &json!({"app": "Finder"}),
+        );
+        assert!(result.is_err());
     }
 }

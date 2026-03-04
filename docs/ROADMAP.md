@@ -1,4 +1,4 @@
-# Operator CLI Roadmap
+# Operator Jack Roadmap
 
 ## Milestones
 
@@ -56,7 +56,7 @@ Built the Swift helper binary and IPC bridge:
 - `ui.listApps` method listing running applications (dock-visible, with name/bundleId/pid/active).
 - Graceful shutdown: close stdin to signal EOF, wait 2s, kill if still alive.
 - `operator-ipc` crate: real process spawning, NDJSON framing, handshake validation, method name translation (snake_case to camelCase), crash detection.
-- `operator doctor` upgraded with 4th accessibility check.
+- `operator-jack doctor` upgraded with 4th accessibility check.
 - Helper auto-discovery: CLI flag, env var, PATH, sibling, dev fallback.
 - 9 new unit tests (5 framing + 4 client), 73 total tests passing.
 
@@ -99,7 +99,7 @@ Enable natural language input for common automation patterns:
   - And more.
 - Patterns are matched using keyword extraction and slot filling, not a language model.
 - Generates a plan JSON from the parsed input.
-- `operator do "open Notes and type hello"` command interface.
+- `operator-jack do "open Notes and type hello"` command interface.
 - Graceful fallback: unrecognized input returns a clear error with suggestions.
 
 ### M5: Browser Executor (CDP)
@@ -126,11 +126,11 @@ Add Chrome DevTools Protocol support for web automation:
 Introduce reusable automation macros:
 
 - Skills are YAML or JSON manifest files that define a parameterized sequence of steps.
-- Skill manifests live in `~/.operator/skills/` or the project's `skills/` directory.
+- Skill manifests live in `~/.operator-jack/skills/` or the project's `skills/` directory.
 - Skills declare inputs (required and optional parameters) and map them to step variables.
-- `operator skill run <name> --param key=value` invocation.
-- `operator skill list` to discover available skills.
-- `operator skill validate <name>` to check a skill manifest.
+- `operator-jack skill run <name> --param key=value` invocation.
+- `operator-jack skill list` to discover available skills.
+- `operator-jack skill validate <name>` to check a skill manifest.
 - Skills are expanded into a full plan at execution time -- they do not introduce new runtime concepts.
 - Community sharing via copying skill files (no package manager, no network).
 
@@ -154,7 +154,7 @@ Improve reliability for real-world automation:
 Enable voice-driven automation using local speech recognition:
 
 - Integrate whisper.cpp for offline speech-to-text (no cloud API, no network).
-- `operator listen` command: activate microphone, transcribe speech, pipe text to the rule-based planner (M4).
+- `operator-jack listen` command: activate microphone, transcribe speech, pipe text to the rule-based planner (M4).
 - Push-to-talk and voice-activity-detection modes.
 - Audio stays local -- recorded audio is processed in memory and discarded after transcription.
 - Configurable model size (tiny, base, small, medium) for speed vs. accuracy tradeoff.

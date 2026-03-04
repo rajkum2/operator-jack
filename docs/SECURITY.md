@@ -1,8 +1,8 @@
-# Operator CLI Security Model
+# Operator Jack Security Model
 
 ## Threat Model
 
-Operator automates macOS tasks by executing structured plans that interact with the filesystem, running applications, and web browsers. The security model addresses three primary threats:
+Operator Jack automates macOS tasks by executing structured plans that interact with the filesystem, running applications, and web browsers. The security model addresses three primary threats:
 
 ### 1. Accidental Data Loss
 
@@ -149,7 +149,7 @@ Every `sys.exec` invocation respects the step-level timeout and the plan-level `
 
 ## Network Isolation
 
-Operator makes **no network calls** during normal operation. All plan execution, storage, and logging happen locally. The only exceptions are:
+Operator Jack makes **no network calls** during normal operation. All plan execution, storage, and logging happen locally. The only exceptions are:
 
 - **`sys.open_url`** -- opens a URL in the default browser. This is a user-visible action, not a background network call.
 - **`browser.*` steps** -- connect to a local Chrome instance via the Chrome DevTools Protocol on localhost. Network requests made by the browser are subject to `allow_domains`.
@@ -160,39 +160,39 @@ There is no telemetry, no update checking, no cloud API calls, and no phoning ho
 
 ### PID File
 
-When `operator run` starts, it writes its process ID to `~/.operator/operator.pid`. This allows:
+When `operator-jack run` starts, it writes its process ID to `~/Library/Application Support/operator-jack/operator-jack.pid`. This allows:
 
-- `operator stop` to find the running process and send SIGTERM.
+- `operator-jack stop` to find the running process and send SIGTERM.
 - Detection of stale PID files (process no longer running).
 
 ### Graceful Shutdown
 
-When `operator stop` is invoked:
+When `operator-jack stop` is invoked:
 
-1. Read the PID from `~/.operator/operator.pid`.
+1. Read the PID from the PID file.
 2. Send SIGTERM to the process.
 3. Wait up to 5 seconds for graceful shutdown.
 4. If still running, send SIGKILL.
 5. Remove the PID file.
 
-The running operator process handles SIGTERM by setting the cancel flag, which causes the engine to skip remaining steps, mark the run as cancelled, and exit cleanly.
+The running operator-jack process handles SIGTERM by setting the cancel flag, which causes the engine to skip remaining steps, mark the run as cancelled, and exit cleanly.
 
 ### No Hidden Background Persistence
 
-Operator does not:
+Operator Jack does not:
 
 - Install launch agents or daemons.
-- Fork into the background (unless explicitly using `operator run --background`, which still writes a PID file).
+- Fork into the background (unless explicitly using `operator-jack run --background`, which still writes a PID file).
 - Start services that survive terminal closure.
 - Register login items.
 
-When operator exits, it is fully stopped. The PID file is cleaned up. There are no lingering processes.
+When operator-jack exits, it is fully stopped. The PID file is cleaned up. There are no lingering processes.
 
 ## Append-Only Audit Log
 
-The JSONL audit log at `~/.operator/audit.jsonl` is designed as an append-only record:
+The JSONL audit log is designed as an append-only record:
 
-- Operator only appends to this file; it never truncates, rotates, or deletes entries.
+- Operator Jack only appends to this file; it never truncates, rotates, or deletes entries.
 - Each line is a complete JSON object with a timestamp, event type, and relevant metadata.
 - Redaction is applied before writing, so the audit log never contains raw secrets.
 - The log can be used for post-hoc analysis, debugging, or compliance review.

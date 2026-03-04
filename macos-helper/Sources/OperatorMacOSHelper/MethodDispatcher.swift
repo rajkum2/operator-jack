@@ -28,7 +28,8 @@ struct MethodDispatcher {
                 id: request.id,
                 code: error.code,
                 message: error.message,
-                retryable: error.retryable
+                retryable: error.retryable,
+                details: error.details
             )
         } catch {
             return IpcResponse.failure(
@@ -45,10 +46,12 @@ struct HelperError: Error {
     let code: String
     let message: String
     let retryable: Bool
+    let details: [String: JSONValue]
 
-    init(code: String, message: String, retryable: Bool = false) {
+    init(code: String, message: String, retryable: Bool = false, details: [String: JSONValue] = [:]) {
         self.code = code
         self.message = message
         self.retryable = retryable
+        self.details = details
     }
 }

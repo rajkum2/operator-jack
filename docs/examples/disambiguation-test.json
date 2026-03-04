@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "name": "Disambiguation test",
+  "description": "Tests ambiguous selector handling — expects ELEMENT_AMBIGUOUS in non-interactive mode",
+  "mode": "unsafe",
+  "allow_apps": ["Calculator"],
+  "steps": [
+    {
+      "id": "open_calc",
+      "type": "sys.open_app",
+      "params": { "app": "Calculator" }
+    },
+    {
+      "id": "wait_calc",
+      "type": "ui.wait_for",
+      "params": {
+        "app": "Calculator",
+        "selector": { "role": "AXWindow" },
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "click_ambiguous",
+      "type": "ui.click",
+      "params": {
+        "app": "Calculator",
+        "selector": { "role": "AXButton" }
+      },
+      "on_fail": "continue"
+    }
+  ]
+}

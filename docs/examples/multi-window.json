@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "name": "Multi-window management",
+  "description": "Opens TextEdit, lists windows, focuses a specific window by title",
+  "mode": "unsafe",
+  "allow_apps": ["TextEdit"],
+  "steps": [
+    {
+      "id": "open_textedit",
+      "type": "sys.open_app",
+      "params": { "app": "TextEdit" }
+    },
+    {
+      "id": "wait_window",
+      "type": "ui.wait_for",
+      "params": {
+        "app": "TextEdit",
+        "selector": { "role": "AXWindow" },
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "list_wins",
+      "type": "ui.list_windows",
+      "params": { "app": "TextEdit" }
+    },
+    {
+      "id": "focus_by_title",
+      "type": "ui.focus_window",
+      "params": {
+        "app": "TextEdit",
+        "window": { "title_contains": "Untitled" }
+      }
+    },
+    {
+      "id": "type_into_window",
+      "type": "ui.type_text",
+      "params": {
+        "app": "TextEdit",
+        "text": "Hello from multi-window test"
+      }
+    }
+  ]
+}
