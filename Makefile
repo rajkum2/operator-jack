@@ -1,7 +1,7 @@
 # Operator Jack — Build Automation
 # Usage: make [target]
 
-VERSION := $(shell grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+VERSION := $(shell sed -n '/\[workspace.package\]/,/\[/{ s/^version = "\(.*\)"/\1/p; }' Cargo.toml)
 RUST_BIN := operator-jack
 SWIFT_BIN := operator-macos-helper
 INSTALL_DIR := /usr/local/bin
