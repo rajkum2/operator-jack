@@ -67,7 +67,8 @@ universal:
 	cp macos-helper/.build/apple/Products/Release/$(SWIFT_BIN) dist/$(SWIFT_BIN)
 	# Package
 	cd dist && tar czf $(RUST_BIN)-v$(VERSION)-macos-universal.tar.gz $(RUST_BIN) $(SWIFT_BIN)
-	cd dist && shasum -a 256 $(RUST_BIN)-v$(VERSION)-macos-universal.tar.gz > $(RUST_BIN)-v$(VERSION)-macos-universal.tar.gz.sha256
+	#cd dist && shasum -a 256 $(RUST_BIN)-v$(VERSION)-macos-universal.tar.gz > $(RUST_BIN)-v$(VERSION)-macos-universal.tar.gz.sha256
+     cd dist && shasum -a 256 $(RUST_BIN)-v$(VERSION)-macos-universal.tar.gz > $(RUST_BIN)-v$(VERSION)-macos-universal.sha256
 	@echo "Built: dist/$(RUST_BIN)-v$(VERSION)-macos-universal.tar.gz"
 
 ## Show available targets
