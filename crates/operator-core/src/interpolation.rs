@@ -120,9 +120,9 @@ fn interpolate_string(
                     ));
                 }
                 None => {
-                    return Err(CoreError::Operator(
-                        OperatorError::interpolation_missing(&var_name),
-                    ));
+                    return Err(CoreError::Operator(OperatorError::interpolation_missing(
+                        &var_name,
+                    )));
                 }
             }
         } else {
@@ -186,13 +186,16 @@ fn parse_variable_name(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> 
 
 /// Returns true if `s` is a valid dotted variable path (e.g. "step.x.output").
 fn is_valid_var_path(s: &str) -> bool {
-    s.split('.').all(|part| !part.is_empty() && is_valid_simple_var(part))
+    s.split('.')
+        .all(|part| !part.is_empty() && is_valid_simple_var(part))
 }
 
 /// Returns true if `s` consists only of `[a-zA-Z0-9_-]` characters.
 /// Hyphens are allowed since step IDs commonly use them (e.g. "step-1").
 fn is_valid_simple_var(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 #[cfg(test)]
@@ -245,8 +248,7 @@ mod tests {
     #[test]
     fn test_dotted_path() {
         let v = vars();
-        let result =
-            interpolate_params(&json!("${step.open_app.output.pid}"), &v).unwrap();
+        let result = interpolate_params(&json!("${step.open_app.output.pid}"), &v).unwrap();
         assert_eq!(result, json!(123));
     }
 
@@ -254,8 +256,7 @@ mod tests {
     fn test_hyphenated_step_id() {
         let v = vars();
         // This was broken before the P3 fix.
-        let result =
-            interpolate_params(&json!("${step.step-1.output.text}"), &v).unwrap();
+        let result = interpolate_params(&json!("${step.step-1.output.text}"), &v).unwrap();
         assert_eq!(result, json!("hello"));
     }
 

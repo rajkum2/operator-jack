@@ -51,7 +51,10 @@ fn from_db_string<T: serde::de::DeserializeOwned>(s: &str) -> Result<T, StoreErr
 fn is_terminal_run_status(status: &RunStatus) -> bool {
     matches!(
         status,
-        RunStatus::Succeeded | RunStatus::CompletedWithErrors | RunStatus::Failed | RunStatus::Cancelled
+        RunStatus::Succeeded
+            | RunStatus::CompletedWithErrors
+            | RunStatus::Failed
+            | RunStatus::Cancelled
     )
 }
 
@@ -324,8 +327,14 @@ impl Store {
         let ended_at: Option<String> = result.ended_at.map(|dt| dt.to_rfc3339());
         // P1 fix: Apply redaction to JSON fields before SQLite writes.
         let input_json = redact_value(&result.input_json).to_string();
-        let output_json: Option<String> = result.output_json.as_ref().map(|v| redact_value(v).to_string());
-        let error_json: Option<String> = result.error_json.as_ref().map(|v| redact_value(v).to_string());
+        let output_json: Option<String> = result
+            .output_json
+            .as_ref()
+            .map(|v| redact_value(v).to_string());
+        let error_json: Option<String> = result
+            .error_json
+            .as_ref()
+            .map(|v| redact_value(v).to_string());
 
         self.conn.execute(
             "INSERT INTO step_results (id, run_id, step_id, step_index, status, attempt, started_at, ended_at, input_json, output_json, error_json)
@@ -355,8 +364,14 @@ impl Store {
         let status_str = to_db_string(&result.status)?;
         let ended_at: Option<String> = result.ended_at.map(|dt| dt.to_rfc3339());
         // P1 fix: Apply redaction to JSON fields before SQLite writes.
-        let output_json: Option<String> = result.output_json.as_ref().map(|v| redact_value(v).to_string());
-        let error_json: Option<String> = result.error_json.as_ref().map(|v| redact_value(v).to_string());
+        let output_json: Option<String> = result
+            .output_json
+            .as_ref()
+            .map(|v| redact_value(v).to_string());
+        let error_json: Option<String> = result
+            .error_json
+            .as_ref()
+            .map(|v| redact_value(v).to_string());
 
         let affected = self.conn.execute(
             "UPDATE step_results SET status = ?1, ended_at = ?2, output_json = ?3, error_json = ?4 WHERE id = ?5",
@@ -652,9 +667,7 @@ mod tests {
         let plan = sample_plan();
         let plan_id = store.save_plan(&plan).expect("save plan");
 
-        let run_id = store
-            .create_run(&plan_id, &Mode::Safe)
-            .expect("create run");
+        let run_id = store.create_run(&plan_id, &Mode::Safe).expect("create run");
         assert!(!run_id.is_empty());
 
         let run = store.get_run(&run_id).expect("get run");
@@ -670,9 +683,7 @@ mod tests {
         let store = Store::open_in_memory().expect("open in-memory store");
         let plan = sample_plan();
         let plan_id = store.save_plan(&plan).expect("save plan");
-        let run_id = store
-            .create_run(&plan_id, &Mode::Safe)
-            .expect("create run");
+        let run_id = store.create_run(&plan_id, &Mode::Safe).expect("create run");
 
         // Transition to Running (non-terminal)
         store
@@ -733,9 +744,7 @@ mod tests {
         let store = Store::open_in_memory().expect("open in-memory store");
         let plan = sample_plan();
         let plan_id = store.save_plan(&plan).expect("save plan");
-        let run_id = store
-            .create_run(&plan_id, &Mode::Safe)
-            .expect("create run");
+        let run_id = store.create_run(&plan_id, &Mode::Safe).expect("create run");
 
         let sr = StepResult {
             id: ulid::Ulid::new().to_string(),
@@ -763,9 +772,7 @@ mod tests {
         let store = Store::open_in_memory().expect("open in-memory store");
         let plan = sample_plan();
         let plan_id = store.save_plan(&plan).expect("save plan");
-        let run_id = store
-            .create_run(&plan_id, &Mode::Safe)
-            .expect("create run");
+        let run_id = store.create_run(&plan_id, &Mode::Safe).expect("create run");
 
         let sr_id = ulid::Ulid::new().to_string();
         let sr = StepResult {
@@ -806,9 +813,7 @@ mod tests {
         let store = Store::open_in_memory().expect("open in-memory store");
         let plan = sample_plan();
         let plan_id = store.save_plan(&plan).expect("save plan");
-        let run_id = store
-            .create_run(&plan_id, &Mode::Safe)
-            .expect("create run");
+        let run_id = store.create_run(&plan_id, &Mode::Safe).expect("create run");
 
         let event = Event::new(
             run_id.clone(),

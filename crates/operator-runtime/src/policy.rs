@@ -101,10 +101,7 @@ impl PolicyGate {
         // -- 1. Allow-apps check (using interpolated params) --------------------
         if !self.allow_apps.is_empty() {
             if let Some(app) = extract_app_from_params(&step.step_type, params) {
-                let allowed = self
-                    .allow_apps
-                    .iter()
-                    .any(|a| a.eq_ignore_ascii_case(&app));
+                let allowed = self.allow_apps.iter().any(|a| a.eq_ignore_ascii_case(&app));
                 if !allowed {
                     return Err(PolicyError::AppNotAllowed(app));
                 }
@@ -189,10 +186,7 @@ fn extract_app_from_params(step_type: &StepType, params: &serde_json::Value) -> 
         );
 
     // System steps that reference an app by name
-    let is_sys_app_step = matches!(
-        step_type,
-        StepType::SysOpenApp | StepType::SysQuitApp
-    );
+    let is_sys_app_step = matches!(step_type, StepType::SysOpenApp | StepType::SysQuitApp);
 
     if is_ui_with_app || is_sys_app_step {
         params

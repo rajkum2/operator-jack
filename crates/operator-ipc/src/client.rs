@@ -36,9 +36,10 @@ impl HelperClient {
     /// Returns `IpcError::HelperNotFound` if no helper path is configured or the
     /// binary does not exist, `IpcError::ProtocolMismatch` if the version is wrong.
     pub fn connect(&mut self) -> Result<(), IpcError> {
-        let path = self.helper_path.as_ref().ok_or_else(|| {
-            IpcError::HelperNotFound("No helper path configured".into())
-        })?;
+        let path = self
+            .helper_path
+            .as_ref()
+            .ok_or_else(|| IpcError::HelperNotFound("No helper path configured".into()))?;
 
         if !std::path::Path::new(path).exists() {
             return Err(IpcError::HelperNotFound(format!(
@@ -56,12 +57,14 @@ impl HelperClient {
             .spawn()
             .map_err(|e| IpcError::SpawnFailed(format!("{}: {}", path, e)))?;
 
-        let stdin = child.stdin.take().ok_or_else(|| {
-            IpcError::SpawnFailed("Failed to capture helper stdin".into())
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            IpcError::SpawnFailed("Failed to capture helper stdout".into())
-        })?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| IpcError::SpawnFailed("Failed to capture helper stdin".into()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| IpcError::SpawnFailed("Failed to capture helper stdout".into()))?;
 
         self.child = Some(child);
         self.stdin = Some(stdin);
@@ -84,7 +87,10 @@ impl HelperClient {
         }
 
         tracing::info!(
-            helper_version = ping_result.get("helper_version").and_then(|v| v.as_str()).unwrap_or("unknown"),
+            helper_version = ping_result
+                .get("helper_version")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown"),
             "helper connected and handshake passed"
         );
 
@@ -122,14 +128,16 @@ impl HelperClient {
         let request = IpcRequest::new(method, params);
         let request_id = request.id.clone();
 
-        let stdin = self.stdin.as_mut().ok_or_else(|| {
-            IpcError::HelperCrashed("Helper stdin not available".into())
-        })?;
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| IpcError::HelperCrashed("Helper stdin not available".into()))?;
         write_ndjson_line(stdin, &request)?;
 
-        let reader = self.reader.as_mut().ok_or_else(|| {
-            IpcError::HelperCrashed("Helper stdout not available".into())
-        })?;
+        let reader = self
+            .reader
+            .as_mut()
+            .ok_or_else(|| IpcError::HelperCrashed("Helper stdout not available".into()))?;
         let response: IpcResponse = read_ndjson_line(reader)?;
 
         // Validate response id matches request id.
@@ -143,11 +151,12 @@ impl HelperClient {
         if response.ok {
             Ok(response.result.unwrap_or(serde_json::json!({})))
         } else if let Some(err) = response.error {
-            let details = if err.details == serde_json::Value::Null || err.details == serde_json::json!({}) {
-                None
-            } else {
-                Some(err.details)
-            };
+            let details =
+                if err.details == serde_json::Value::Null || err.details == serde_json::json!({}) {
+                    None
+                } else {
+                    Some(err.details)
+                };
             Err(IpcError::HelperError {
                 code: err.code,
                 message: err.message,

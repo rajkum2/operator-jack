@@ -1,5 +1,5 @@
 pub mod engine;
-pub mod policy;
-pub mod logging;
 mod error;
+pub mod logging;
+pub mod policy;
 pub use error::RuntimeError;

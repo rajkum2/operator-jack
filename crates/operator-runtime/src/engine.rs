@@ -122,7 +122,10 @@ impl Engine {
         let (_id, plan) = self.store.get_plan(plan_id)?;
 
         // -- 2. Determine effective mode ----------------------------------------
-        let effective_mode = plan.mode.clone().unwrap_or_else(|| self.config.mode.clone());
+        let effective_mode = plan
+            .mode
+            .clone()
+            .unwrap_or_else(|| self.config.mode.clone());
 
         // -- 3. Create run (queued) ---------------------------------------------
         let run_id = self.store.create_run(plan_id, &effective_mode)?;
@@ -174,10 +177,8 @@ impl Engine {
         let _ = logger.log_event(&run_started_event);
 
         // -- 8. Initialise variables from plan.variables ------------------------
-        let mut variables: HashMap<String, serde_json::Value> = plan
-            .variables
-            .clone()
-            .unwrap_or_default();
+        let mut variables: HashMap<String, serde_json::Value> =
+            plan.variables.clone().unwrap_or_default();
 
         // -- 9. Step execution loop ---------------------------------------------
         let total_steps = plan.steps.len();
@@ -236,10 +237,7 @@ impl Engine {
                     );
                     steps_failed += 1;
 
-                    match handle_on_fail(
-                        &step.effective_on_fail(),
-                        self.config.interactive,
-                    ) {
+                    match handle_on_fail(&step.effective_on_fail(), self.config.interactive) {
                         OnFailAction::Abort => {
                             aborted = true;
                             steps_skipped += total_steps - idx - 1;
@@ -258,61 +256,60 @@ impl Engine {
             // -- 9c. Policy gate ------------------------------------------------
             // Use interpolated params for policy checks so variable-derived
             // app names and URLs are properly validated.
-            let policy_decision = match policy.check_step_with_params(step, &interpolated_params, idx, total_steps) {
-                Ok(d) => d,
-                Err(PolicyError::AppNotAllowed(app)) => {
-                    let msg = format!("App not allowed: {}", app);
-                    tracing::warn!(step_id = %step.id, "{}", msg);
-                    let sr = make_failed_step_result(
-                        &run_id, &step.id, idx, &interpolated_params, &msg,
-                    );
-                    let _ = self.store.insert_step_result(&sr);
-                    emit_step_failed(
-                        &self.store, &mut logger, &run_id, &step.id, idx, &msg,
-                    );
-                    steps_failed += 1;
+            let policy_decision =
+                match policy.check_step_with_params(step, &interpolated_params, idx, total_steps) {
+                    Ok(d) => d,
+                    Err(PolicyError::AppNotAllowed(app)) => {
+                        let msg = format!("App not allowed: {}", app);
+                        tracing::warn!(step_id = %step.id, "{}", msg);
+                        let sr = make_failed_step_result(
+                            &run_id,
+                            &step.id,
+                            idx,
+                            &interpolated_params,
+                            &msg,
+                        );
+                        let _ = self.store.insert_step_result(&sr);
+                        emit_step_failed(&self.store, &mut logger, &run_id, &step.id, idx, &msg);
+                        steps_failed += 1;
 
-                    // Respect on_fail instead of unconditional abort.
-                    match handle_on_fail(
-                        &step.effective_on_fail(),
-                        self.config.interactive,
-                    ) {
-                        OnFailAction::Abort => {
-                            aborted = true;
-                            steps_skipped += total_steps - idx - 1;
-                            break;
+                        // Respect on_fail instead of unconditional abort.
+                        match handle_on_fail(&step.effective_on_fail(), self.config.interactive) {
+                            OnFailAction::Abort => {
+                                aborted = true;
+                                steps_skipped += total_steps - idx - 1;
+                                break;
+                            }
+                            OnFailAction::Continue => continue,
+                            OnFailAction::Retry => continue, // cannot retry a policy error
                         }
-                        OnFailAction::Continue => continue,
-                        OnFailAction::Retry => continue, // cannot retry a policy error
                     }
-                }
-                Err(PolicyError::DomainNotAllowed(domain)) => {
-                    let msg = format!("Domain not allowed: {}", domain);
-                    tracing::warn!(step_id = %step.id, "{}", msg);
-                    let sr = make_failed_step_result(
-                        &run_id, &step.id, idx, &interpolated_params, &msg,
-                    );
-                    let _ = self.store.insert_step_result(&sr);
-                    emit_step_failed(
-                        &self.store, &mut logger, &run_id, &step.id, idx, &msg,
-                    );
-                    steps_failed += 1;
+                    Err(PolicyError::DomainNotAllowed(domain)) => {
+                        let msg = format!("Domain not allowed: {}", domain);
+                        tracing::warn!(step_id = %step.id, "{}", msg);
+                        let sr = make_failed_step_result(
+                            &run_id,
+                            &step.id,
+                            idx,
+                            &interpolated_params,
+                            &msg,
+                        );
+                        let _ = self.store.insert_step_result(&sr);
+                        emit_step_failed(&self.store, &mut logger, &run_id, &step.id, idx, &msg);
+                        steps_failed += 1;
 
-                    // Respect on_fail instead of unconditional abort.
-                    match handle_on_fail(
-                        &step.effective_on_fail(),
-                        self.config.interactive,
-                    ) {
-                        OnFailAction::Abort => {
-                            aborted = true;
-                            steps_skipped += total_steps - idx - 1;
-                            break;
+                        // Respect on_fail instead of unconditional abort.
+                        match handle_on_fail(&step.effective_on_fail(), self.config.interactive) {
+                            OnFailAction::Abort => {
+                                aborted = true;
+                                steps_skipped += total_steps - idx - 1;
+                                break;
+                            }
+                            OnFailAction::Continue => continue,
+                            OnFailAction::Retry => continue, // cannot retry a policy error
                         }
-                        OnFailAction::Continue => continue,
-                        OnFailAction::Retry => continue, // cannot retry a policy error
                     }
-                }
-            };
+                };
 
             match policy_decision {
                 PolicyDecision::DryRun => {
@@ -360,10 +357,7 @@ impl Engine {
                     );
                     steps_failed += 1;
 
-                    match handle_on_fail(
-                        &step.effective_on_fail(),
-                        self.config.interactive,
-                    ) {
+                    match handle_on_fail(&step.effective_on_fail(), self.config.interactive) {
                         OnFailAction::Abort => {
                             aborted = true;
                             steps_skipped += total_steps - idx - 1;
@@ -396,10 +390,7 @@ impl Engine {
                     );
                     steps_failed += 1;
 
-                    match handle_on_fail(
-                        &step.effective_on_fail(),
-                        self.config.interactive,
-                    ) {
+                    match handle_on_fail(&step.effective_on_fail(), self.config.interactive) {
                         OnFailAction::Abort => {
                             aborted = true;
                             steps_skipped += total_steps - idx - 1;
@@ -549,12 +540,7 @@ impl Engine {
                             "status": "succeeded",
                         });
 
-                        merge_step_variable(
-                            &mut variables,
-                            &step_var_key,
-                            &step.id,
-                            step_entry,
-                        );
+                        merge_step_variable(&mut variables, &step_var_key, &step.id, step_entry);
 
                         step_succeeded = true;
                         break;
@@ -617,12 +603,7 @@ impl Engine {
                     "status": "failed",
                 });
 
-                merge_step_variable(
-                    &mut variables,
-                    &step_var_key,
-                    &step.id,
-                    step_entry,
-                );
+                merge_step_variable(&mut variables, &step_var_key, &step.id, step_entry);
 
                 // Handle on_fail strategy
                 match handle_on_fail_with_ask(
@@ -736,11 +717,8 @@ impl Engine {
             None
         };
 
-        self.store.update_run_status(
-            &run_id,
-            &terminal_status,
-            error_payload.as_ref(),
-        )?;
+        self.store
+            .update_run_status(&run_id, &terminal_status, error_payload.as_ref())?;
 
         let event_type = if terminal_status == RunStatus::Cancelled {
             EventType::RunCancelled
@@ -790,7 +768,6 @@ impl Engine {
             duration_ms,
         })
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -832,9 +809,9 @@ fn execute_with_timeout(
         }
         "ui" => {
             // UI steps go through the helper IPC client.
-            let h = helper.as_mut().ok_or_else(|| {
-                RuntimeError::Other("Helper client not initialised".to_string())
-            })?;
+            let h = helper
+                .as_mut()
+                .ok_or_else(|| RuntimeError::Other("Helper client not initialised".to_string()))?;
 
             if !h.is_connected() {
                 h.connect()?;
@@ -877,11 +854,9 @@ fn maybe_disambiguate(
 
     // Check if this is specifically an ELEMENT_AMBIGUOUS helper error
     let (code, details) = match &err {
-        RuntimeError::Ipc(operator_ipc::IpcError::HelperError {
-            code,
-            details,
-            ..
-        }) => (code.as_str(), details.clone()),
+        RuntimeError::Ipc(operator_ipc::IpcError::HelperError { code, details, .. }) => {
+            (code.as_str(), details.clone())
+        }
         _ => return Err(err),
     };
 
@@ -912,24 +887,15 @@ fn maybe_disambiguate(
         .unwrap_or("unknown app");
 
     eprintln!();
-    eprintln!(
-        "Multiple UI matches for selector in app \"{}\":",
-        app_name
-    );
+    eprintln!("Multiple UI matches for selector in app \"{}\":", app_name);
 
     for (i, candidate) in candidates.iter().enumerate() {
         let role = candidate
             .get("role")
             .and_then(|v| v.as_str())
             .unwrap_or("?");
-        let name = candidate
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let path = candidate
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let name = candidate.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let path = candidate.get("path").and_then(|v| v.as_str()).unwrap_or("");
 
         let name_display = if name.is_empty() {
             String::new()
@@ -937,19 +903,10 @@ fn maybe_disambiguate(
             format!(" name=\"{}\"", name)
         };
 
-        eprintln!(
-            "  {}) {}{} path=\"{}\"",
-            i + 1,
-            role,
-            name_display,
-            path
-        );
+        eprintln!("  {}) {}{} path=\"{}\"", i + 1, role, name_display, path);
     }
 
-    eprint!(
-        "Choose [1-{}] or q to abort: ",
-        candidates.len()
-    );
+    eprint!("Choose [1-{}] or q to abort: ", candidates.len());
 
     // Read user choice from stdin
     let mut input = String::new();
@@ -1101,11 +1058,7 @@ fn intersect_lists(cli: &[String], plan: &Option<Vec<String>>) -> Vec<String> {
 
     // Both non-empty: intersect (case-insensitive).
     cli.iter()
-        .filter(|c| {
-            plan_list
-                .iter()
-                .any(|p| p.eq_ignore_ascii_case(c.as_str()))
-        })
+        .filter(|c| plan_list.iter().any(|p| p.eq_ignore_ascii_case(c.as_str())))
         .cloned()
         .collect()
 }

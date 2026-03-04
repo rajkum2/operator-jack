@@ -107,7 +107,10 @@ impl OperatorError {
     pub fn helper_protocol_mismatch(helper: &str, detail: impl Into<String>) -> Self {
         Self::new(
             "HELPER_PROTOCOL_MISMATCH",
-            format!("Protocol mismatch with helper '{helper}': {}", detail.into()),
+            format!(
+                "Protocol mismatch with helper '{helper}': {}",
+                detail.into()
+            ),
             false,
         )
         .with_details(serde_json::json!({ "helper": helper }))

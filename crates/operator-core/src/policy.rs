@@ -113,13 +113,19 @@ mod tests {
     #[test]
     fn test_unsafe_mode_never_requires_confirmation() {
         assert!(!requires_confirmation(&StepType::SysExec, &Mode::Unsafe));
-        assert!(!requires_confirmation(&StepType::SysDeletePath, &Mode::Unsafe));
+        assert!(!requires_confirmation(
+            &StepType::SysDeletePath,
+            &Mode::Unsafe
+        ));
     }
 
     #[test]
     fn test_list_windows_is_low_risk() {
         assert_eq!(risk_level(&StepType::UiListWindows), RiskLevel::Low);
-        assert!(!requires_confirmation(&StepType::UiListWindows, &Mode::Safe));
+        assert!(!requires_confirmation(
+            &StepType::UiListWindows,
+            &Mode::Safe
+        ));
     }
 
     #[test]

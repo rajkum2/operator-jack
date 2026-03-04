@@ -29,7 +29,11 @@ use operator_store::Store;
 // ---------------------------------------------------------------------------
 
 #[derive(Parser)]
-#[command(name = "operator-jack", version, about = "macOS-first CLI for deterministic computer automation")]
+#[command(
+    name = "operator-jack",
+    version,
+    about = "macOS-first CLI for deterministic computer automation"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -248,7 +252,11 @@ fn cmd_doctor(cli: &Cli) -> Result<()> {
                 client.disconnect();
                 match result {
                     Ok(val) => {
-                        if val.get("trusted").and_then(|v: &serde_json::Value| v.as_bool()).unwrap_or(false) {
+                        if val
+                            .get("trusted")
+                            .and_then(|v: &serde_json::Value| v.as_bool())
+                            .unwrap_or(false)
+                        {
                             "GRANTED"
                         } else {
                             "NOT GRANTED"
@@ -321,7 +329,10 @@ fn cmd_doctor(cli: &Cli) -> Result<()> {
             println!("  To grant accessibility access:");
             println!("  1. Open System Settings > Privacy & Security > Accessibility");
             println!("  2. Click '+' and add: {}", terminal_display);
-            println!("  3. Restart {} and run: operator-jack doctor", terminal_display);
+            println!(
+                "  3. Restart {} and run: operator-jack doctor",
+                terminal_display
+            );
         }
 
         if !helper_found {
@@ -344,7 +355,15 @@ fn cmd_doctor(cli: &Cli) -> Result<()> {
         println!("DB path:  {}", db_path.display());
         println!("Log dir:  {}", log_dir.display());
         if let Some(ref cp) = config_path {
-            println!("Config:   {}{}", cp.display(), if is_first_run { " (not yet created)" } else { "" });
+            println!(
+                "Config:   {}{}",
+                cp.display(),
+                if is_first_run {
+                    " (not yet created)"
+                } else {
+                    ""
+                }
+            );
         }
     }
 
@@ -620,11 +639,10 @@ fn cmd_logs(cli: &Cli, run_id: Option<String>, full: bool) -> Result<()> {
                     );
                     println!("{}", "-".repeat(90));
                     for run in &runs {
-                        let status_str =
-                            serde_json::to_value(&run.status)
-                                .ok()
-                                .and_then(|v| v.as_str().map(String::from))
-                                .unwrap_or_else(|| format!("{:?}", run.status));
+                        let status_str = serde_json::to_value(&run.status)
+                            .ok()
+                            .and_then(|v| v.as_str().map(String::from))
+                            .unwrap_or_else(|| format!("{:?}", run.status));
                         let started = run.started_at.format("%Y-%m-%d %H:%M:%S").to_string();
                         println!(
                             "{:<28} {:<28} {:<22} {:<12}",
@@ -669,9 +687,7 @@ fn cmd_logs(cli: &Cli, run_id: Option<String>, full: bool) -> Result<()> {
                 }
             } else {
                 // Show run detail + step results.
-                let run = store
-                    .get_run(rid)
-                    .context("failed to get run")?;
+                let run = store.get_run(rid).context("failed to get run")?;
                 let step_results = store
                     .get_step_results(rid)
                     .context("failed to get step results")?;
@@ -683,11 +699,10 @@ fn cmd_logs(cli: &Cli, run_id: Option<String>, full: bool) -> Result<()> {
                     });
                     println!("{}", serde_json::to_string_pretty(&obj)?);
                 } else {
-                    let status_str =
-                        serde_json::to_value(&run.status)
-                            .ok()
-                            .and_then(|v| v.as_str().map(String::from))
-                            .unwrap_or_else(|| format!("{:?}", run.status));
+                    let status_str = serde_json::to_value(&run.status)
+                        .ok()
+                        .and_then(|v| v.as_str().map(String::from))
+                        .unwrap_or_else(|| format!("{:?}", run.status));
 
                     println!("Run:     {}", run.id);
                     println!("Plan:    {}", run.plan_id);
@@ -713,11 +728,10 @@ fn cmd_logs(cli: &Cli, run_id: Option<String>, full: bool) -> Result<()> {
                         );
                         println!("{}", "-".repeat(70));
                         for sr in &step_results {
-                            let sr_status =
-                                serde_json::to_value(&sr.status)
-                                    .ok()
-                                    .and_then(|v| v.as_str().map(String::from))
-                                    .unwrap_or_else(|| format!("{:?}", sr.status));
+                            let sr_status = serde_json::to_value(&sr.status)
+                                .ok()
+                                .and_then(|v| v.as_str().map(String::from))
+                                .unwrap_or_else(|| format!("{:?}", sr.status));
                             let error_msg = sr
                                 .error_json
                                 .as_ref()
@@ -776,9 +790,7 @@ fn cmd_stop(cli: &Cli) -> Result<()> {
             for _ in 0..50 {
                 thread::sleep(Duration::from_millis(100));
                 // Check if process is still alive: kill -0 returns success if alive.
-                let status = Command::new("kill")
-                    .args(["-0", &pid.to_string()])
-                    .output();
+                let status = Command::new("kill").args(["-0", &pid.to_string()]).output();
                 match status {
                     Ok(output) if output.status.success() => {
                         // Still alive, keep waiting.
@@ -822,8 +834,9 @@ fn cmd_stop(cli: &Cli) -> Result<()> {
 
 /// Connects to the macOS helper and dumps the accessibility tree for an app.
 fn cmd_ui_inspect(cli: &Cli, app: &str, depth: u32) -> Result<()> {
-    let helper_path = resolve_helper_path(cli)
-        .ok_or_else(|| anyhow::anyhow!("Helper binary not found. Run 'operator doctor' to check."))?;
+    let helper_path = resolve_helper_path(cli).ok_or_else(|| {
+        anyhow::anyhow!("Helper binary not found. Run 'operator doctor' to check.")
+    })?;
 
     let mut client =
         operator_ipc::client::HelperClient::new(Some(helper_path.to_string_lossy().to_string()));
@@ -844,11 +857,11 @@ fn cmd_ui_inspect(cli: &Cli, app: &str, depth: u32) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&val)?);
             } else {
                 // Pretty-print the tree with indentation
-                let node_count = val
-                    .get("node_count")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                println!("Accessibility tree for \"{}\" ({} nodes, depth {}):", app, node_count, depth);
+                let node_count = val.get("node_count").and_then(|v| v.as_u64()).unwrap_or(0);
+                println!(
+                    "Accessibility tree for \"{}\" ({} nodes, depth {}):",
+                    app, node_count, depth
+                );
                 println!();
                 if let Some(tree) = val.get("tree") {
                     print_ax_tree(tree, 0);
@@ -1116,11 +1129,10 @@ fn exit_code_for_status(status: &RunStatus) -> i32 {
 /// Prints a `RunSummary` to stdout, respecting --json and --quiet flags.
 fn print_run_summary(cli: &Cli, summary: &RunSummary) {
     if cli.json {
-        let status_str =
-            serde_json::to_value(&summary.status)
-                .ok()
-                .and_then(|v| v.as_str().map(String::from))
-                .unwrap_or_else(|| format!("{:?}", summary.status));
+        let status_str = serde_json::to_value(&summary.status)
+            .ok()
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| format!("{:?}", summary.status));
         let obj = serde_json::json!({
             "run_id": summary.run_id,
             "plan_id": summary.plan_id,
@@ -1137,20 +1149,18 @@ fn print_run_summary(cli: &Cli, summary: &RunSummary) {
     }
 
     if cli.quiet {
-        let status_str =
-            serde_json::to_value(&summary.status)
-                .ok()
-                .and_then(|v| v.as_str().map(String::from))
-                .unwrap_or_else(|| format!("{:?}", summary.status));
+        let status_str = serde_json::to_value(&summary.status)
+            .ok()
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| format!("{:?}", summary.status));
         println!("{}", status_str);
         return;
     }
 
-    let status_str =
-        serde_json::to_value(&summary.status)
-            .ok()
-            .and_then(|v| v.as_str().map(String::from))
-            .unwrap_or_else(|| format!("{:?}", summary.status));
+    let status_str = serde_json::to_value(&summary.status)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_else(|| format!("{:?}", summary.status));
 
     println!();
     println!("Run complete");
@@ -1159,10 +1169,7 @@ fn print_run_summary(cli: &Cli, summary: &RunSummary) {
     println!("  Status:    {}", status_str);
     println!(
         "  Steps:     {} total, {} succeeded, {} failed, {} skipped",
-        summary.steps_total,
-        summary.steps_succeeded,
-        summary.steps_failed,
-        summary.steps_skipped
+        summary.steps_total, summary.steps_succeeded, summary.steps_failed, summary.steps_skipped
     );
     println!("  Duration:  {} ms", summary.duration_ms);
 }
@@ -1196,10 +1203,7 @@ fn resolve_helper_path(cli: &Cli) -> Option<PathBuf> {
     }
 
     // 3. System PATH via `which`.
-    if let Ok(output) = Command::new("which")
-        .arg("operator-macos-helper")
-        .output()
-    {
+    if let Ok(output) = Command::new("which").arg("operator-macos-helper").output() {
         if output.status.success() {
             let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !path_str.is_empty() {
@@ -1284,10 +1288,7 @@ fn set_ctrlc_handler(flag: Arc<AtomicBool>) -> Result<()> {
     // is intentionally leaked (via `into_raw`) so the pointed-to
     // AtomicBool lives for the duration of the process.
     unsafe {
-        CANCEL_FLAG_PTR.store(
-            Arc::into_raw(flag) as usize,
-            Ordering::SeqCst,
-        );
+        CANCEL_FLAG_PTR.store(Arc::into_raw(flag) as usize, Ordering::SeqCst);
 
         // Register handlers for both SIGINT (Ctrl-C) and SIGTERM.
         libc_signal(SIGINT, signal_handler as SignalHandler);
@@ -1307,8 +1308,7 @@ type SignalHandler = extern "C" fn(i32);
 /// Global storage for the cancel flag pointer, accessed from the signal
 /// handler. Stored as a `usize` because `AtomicPtr` is not available in
 /// `const` context and `usize` is the same size as a pointer.
-static CANCEL_FLAG_PTR: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+static CANCEL_FLAG_PTR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Minimal signal handler that sets the cancel flag. Handles both SIGINT
 /// and SIGTERM.
@@ -1347,8 +1347,8 @@ unsafe fn libc_signal(_sig: i32, _handler: SignalHandler) {
 // ---------------------------------------------------------------------------
 
 fn cmd_init(_cli: &Cli) -> Result<()> {
-    let config_path = OperatorConfig::default_path()
-        .context("could not determine config directory")?;
+    let config_path =
+        OperatorConfig::default_path().context("could not determine config directory")?;
 
     if config_path.exists() {
         eprintln!("Config file already exists: {}", config_path.display());

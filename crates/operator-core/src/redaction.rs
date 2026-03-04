@@ -19,17 +19,14 @@ static ULID_RE: LazyLock<Regex> =
 
 /// Compiled regex for base64-like strings (> 40 chars, only base64 alphabet).
 /// Threshold raised to 40 to avoid false positives on short identifiers like ULIDs.
-static BASE64_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[A-Za-z0-9+/=]{41,}$").unwrap());
+static BASE64_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9+/=]{41,}$").unwrap());
 
 /// Compiled regex for hex strings (>= 32 hex chars).
-static HEX_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[A-Fa-f0-9]{32,}$").unwrap());
+static HEX_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Fa-f0-9]{32,}$").unwrap());
 
 /// Compiled regex for JWT-like tokens (three dot-separated base64url segments).
-static JWT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$").unwrap()
-});
+static JWT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$").unwrap());
 
 const REDACTED: &str = "[REDACTED]";
 

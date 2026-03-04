@@ -1,5 +1,5 @@
-pub mod protocol;
 pub mod client;
-pub mod framing;
 mod error;
+pub mod framing;
+pub mod protocol;
 pub use error::IpcError;

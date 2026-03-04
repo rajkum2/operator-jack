@@ -29,7 +29,9 @@ pub fn validate_plan(plan: &Plan) -> Result<(), Vec<OperatorError>> {
 
     // 2. name must be non-empty
     if plan.name.trim().is_empty() {
-        errors.push(OperatorError::validation_error("plan name must not be empty"));
+        errors.push(OperatorError::validation_error(
+            "plan name must not be empty",
+        ));
     }
 
     // 3. steps must be non-empty
@@ -218,7 +220,10 @@ fn require_object_param(params: &serde_json::Value, key: &str) -> Result<(), Str
 /// Requires either a `selector` object or an `element_ref` string param.
 fn require_selector_or_element_ref(params: &serde_json::Value) -> Result<(), String> {
     let has_selector = matches!(params.get("selector"), Some(serde_json::Value::Object(_)));
-    let has_element_ref = matches!(params.get("element_ref"), Some(serde_json::Value::String(_)));
+    let has_element_ref = matches!(
+        params.get("element_ref"),
+        Some(serde_json::Value::String(_))
+    );
 
     if has_selector || has_element_ref {
         Ok(())
@@ -408,10 +413,7 @@ mod tests {
         assert!(result.is_ok());
 
         // click with neither selector nor element_ref should fail
-        let result = validate_step_params(
-            &StepType::UiClick,
-            &json!({"app": "Finder"}),
-        );
+        let result = validate_step_params(&StepType::UiClick, &json!({"app": "Finder"}));
         assert!(result.is_err());
     }
 }

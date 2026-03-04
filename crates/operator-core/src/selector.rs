@@ -81,10 +81,7 @@ impl Selector {
             // Validate each alternative
             for (i, alt) in alternatives.iter().enumerate() {
                 if let Err(e) = alt.validate() {
-                    return Err(CoreError::Validation(format!(
-                        "any_of[{}]: {}",
-                        i, e
-                    )));
+                    return Err(CoreError::Validation(format!("any_of[{}]: {}", i, e)));
                 }
             }
 
@@ -302,13 +299,11 @@ mod tests {
     #[test]
     fn test_any_of_roundtrip() {
         let sel = Selector {
-            any_of: Some(vec![
-                Selector {
-                    role: Some("AXButton".into()),
-                    name: Some("Save".into()),
-                    ..Default::default()
-                },
-            ]),
+            any_of: Some(vec![Selector {
+                role: Some("AXButton".into()),
+                name: Some("Save".into()),
+                ..Default::default()
+            }]),
             ..Default::default()
         };
         let json = serde_json::to_value(&sel).unwrap();

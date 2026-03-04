@@ -216,7 +216,10 @@ mod tests {
             db_path = "/tmp/operator.db"
         "#;
         let cfg: OperatorConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(cfg.helper_path.as_deref(), Some("/usr/local/bin/operator-macos-helper"));
+        assert_eq!(
+            cfg.helper_path.as_deref(),
+            Some("/usr/local/bin/operator-macos-helper")
+        );
         assert_eq!(cfg.default_mode, "unsafe");
         assert!(!cfg.interactive);
         assert_eq!(cfg.default_step_timeout_ms, 10_000);

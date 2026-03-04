@@ -31,10 +31,7 @@ const CAPTURE_CAP: usize = 1_048_576;
 // ---------------------------------------------------------------------------
 
 /// Execute a system-lane step. Returns the output JSON on success.
-pub fn execute_system_step(
-    step_type: &StepType,
-    params: &Value,
-) -> Result<Value, SystemExecError> {
+pub fn execute_system_step(step_type: &StepType, params: &Value) -> Result<Value, SystemExecError> {
     let start = Instant::now();
 
     let result = match step_type {
@@ -81,10 +78,7 @@ fn require_str<'a>(params: &'a Value, key: &str) -> Result<&'a str, SystemExecEr
 
 /// Extracts an optional bool parameter, defaulting to the given value.
 fn opt_bool(params: &Value, key: &str, default: bool) -> bool {
-    params
-        .get(key)
-        .and_then(|v| v.as_bool())
-        .unwrap_or(default)
+    params.get(key).and_then(|v| v.as_bool()).unwrap_or(default)
 }
 
 /// Expands a leading `~` to the user's home directory.
@@ -106,9 +100,7 @@ fn exec_open_app(params: &Value) -> Result<Value, SystemExecError> {
     let app = require_str(params, "app")?;
     tracing::info!(app = %app, "sys.open_app");
 
-    let output = Command::new("open")
-        .args(["-a", app])
-        .output()?;
+    let output = Command::new("open").args(["-a", app]).output()?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -127,9 +119,7 @@ fn exec_open_url(params: &Value) -> Result<Value, SystemExecError> {
     let url = require_str(params, "url")?;
     tracing::info!(url = %url, "sys.open_url");
 
-    let output = Command::new("open")
-        .arg(url)
-        .output()?;
+    let output = Command::new("open").arg(url).output()?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -152,9 +142,7 @@ fn exec_quit_app(params: &Value) -> Result<Value, SystemExecError> {
 
     if force {
         // Force quit via pkill
-        let output = Command::new("pkill")
-            .args(["-x", app])
-            .output()?;
+        let output = Command::new("pkill").args(["-x", app]).output()?;
 
         // pkill returns 0 if matched, 1 if no match. Both are acceptable.
         let quit = output.status.success();
@@ -162,9 +150,7 @@ fn exec_quit_app(params: &Value) -> Result<Value, SystemExecError> {
     } else {
         // Graceful quit via AppleScript
         let script = format!("tell application \"{}\" to quit", app);
-        let output = Command::new("osascript")
-            .args(["-e", &script])
-            .output()?;
+        let output = Command::new("osascript").args(["-e", &script]).output()?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -232,10 +218,7 @@ fn exec_append_file(params: &Value) -> Result<Value, SystemExecError> {
         }
     }
 
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)?;
+    let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
     file.write_all(content.as_bytes())?;
 
     Ok(json!({
