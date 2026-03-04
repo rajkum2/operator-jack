@@ -366,7 +366,7 @@ fn exec_command(params: &Value) -> Result<Value, SystemExecError> {
     let cwd = params
         .get("cwd")
         .and_then(|v| v.as_str())
-        .map(|s| expand_tilde(s))
+        .map(expand_tilde)
         .unwrap_or(default_home);
 
     let env_clean = opt_bool(params, "env_clean", false);

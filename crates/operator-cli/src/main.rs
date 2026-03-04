@@ -279,7 +279,7 @@ fn cmd_doctor(cli: &Cli) -> Result<()> {
 
     // Detect first run (no config file exists).
     let config_path = OperatorConfig::default_path();
-    let is_first_run = config_path.as_ref().map_or(true, |p| !p.exists());
+    let is_first_run = config_path.as_ref().is_none_or(|p| !p.exists());
 
     // Detect terminal app for targeted accessibility instructions.
     let terminal_app = std::env::var("TERM_PROGRAM").ok();
@@ -629,26 +629,24 @@ fn cmd_logs(cli: &Cli, run_id: Option<String>, full: bool) -> Result<()> {
             if cli.json {
                 let obj = serde_json::to_value(&runs)?;
                 println!("{}", serde_json::to_string_pretty(&obj)?);
+            } else if runs.is_empty() {
+                println!("No runs found.");
             } else {
-                if runs.is_empty() {
-                    println!("No runs found.");
-                } else {
+                println!(
+                    "{:<28} {:<28} {:<22} {:<12}",
+                    "RUN ID", "PLAN ID", "STATUS", "STARTED"
+                );
+                println!("{}", "-".repeat(90));
+                for run in &runs {
+                    let status_str = serde_json::to_value(&run.status)
+                        .ok()
+                        .and_then(|v| v.as_str().map(String::from))
+                        .unwrap_or_else(|| format!("{:?}", run.status));
+                    let started = run.started_at.format("%Y-%m-%d %H:%M:%S").to_string();
                     println!(
                         "{:<28} {:<28} {:<22} {:<12}",
-                        "RUN ID", "PLAN ID", "STATUS", "STARTED"
+                        run.id, run.plan_id, status_str, started
                     );
-                    println!("{}", "-".repeat(90));
-                    for run in &runs {
-                        let status_str = serde_json::to_value(&run.status)
-                            .ok()
-                            .and_then(|v| v.as_str().map(String::from))
-                            .unwrap_or_else(|| format!("{:?}", run.status));
-                        let started = run.started_at.format("%Y-%m-%d %H:%M:%S").to_string();
-                        println!(
-                            "{:<28} {:<28} {:<22} {:<12}",
-                            run.id, run.plan_id, status_str, started
-                        );
-                    }
                 }
             }
         }
@@ -723,8 +721,8 @@ fn cmd_logs(cli: &Cli, run_id: Option<String>, full: bool) -> Result<()> {
                         println!("No step results recorded.");
                     } else {
                         println!(
-                            "{:<6} {:<20} {:<14} {:<8} {}",
-                            "INDEX", "STEP ID", "STATUS", "ATTEMPT", "ERROR"
+                            "{:<6} {:<20} {:<14} {:<8} ERROR",
+                            "INDEX", "STEP ID", "STATUS", "ATTEMPT"
                         );
                         println!("{}", "-".repeat(70));
                         for sr in &step_results {

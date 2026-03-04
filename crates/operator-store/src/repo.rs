@@ -111,16 +111,16 @@ impl Store {
         let plan_json = serde_json::to_string(plan)?;
         let now = Utc::now().to_rfc3339();
 
-        let mode_str: Option<String> = plan.mode.as_ref().map(|m| to_db_string(m)).transpose()?;
+        let mode_str: Option<String> = plan.mode.as_ref().map(to_db_string).transpose()?;
         let allow_apps_json: Option<String> = plan
             .allow_apps
             .as_ref()
-            .map(|v| serde_json::to_string(v))
+            .map(serde_json::to_string)
             .transpose()?;
         let allow_domains_json: Option<String> = plan
             .allow_domains
             .as_ref()
-            .map(|v| serde_json::to_string(v))
+            .map(serde_json::to_string)
             .transpose()?;
 
         self.conn.execute(

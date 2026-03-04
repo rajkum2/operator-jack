@@ -80,6 +80,7 @@ pub struct Engine {
     /// Optional callback invoked with the run_id immediately after the run
     /// record is created (before steps begin). Used by the CLI to update the
     /// PID file with the correct run_id.
+    #[allow(clippy::type_complexity)]
     on_run_created: Option<Box<dyn FnOnce(&str)>>,
 }
 

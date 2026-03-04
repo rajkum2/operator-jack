@@ -109,18 +109,16 @@ impl PolicyGate {
         }
 
         // -- 2. Allow-domains check (sys.open_url only, using interpolated params)
-        if !self.allow_domains.is_empty() {
-            if step.step_type == StepType::SysOpenUrl {
-                if let Some(url) = params.get("url").and_then(|v| v.as_str()) {
-                    let domain = extract_domain(url);
-                    if !domain.is_empty() {
-                        let allowed = self
-                            .allow_domains
-                            .iter()
-                            .any(|d| d.eq_ignore_ascii_case(&domain));
-                        if !allowed {
-                            return Err(PolicyError::DomainNotAllowed(domain));
-                        }
+        if !self.allow_domains.is_empty() && step.step_type == StepType::SysOpenUrl {
+            if let Some(url) = params.get("url").and_then(|v| v.as_str()) {
+                let domain = extract_domain(url);
+                if !domain.is_empty() {
+                    let allowed = self
+                        .allow_domains
+                        .iter()
+                        .any(|d| d.eq_ignore_ascii_case(&domain));
+                    if !allowed {
+                        return Err(PolicyError::DomainNotAllowed(domain));
                     }
                 }
             }

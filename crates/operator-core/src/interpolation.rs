@@ -144,8 +144,7 @@ fn is_single_variable_ref(s: &str) -> Option<&str> {
         if !inner.is_empty() && is_valid_var_path(inner) {
             return Some(inner);
         }
-    } else if s.starts_with('$') {
-        let name = &s[1..];
+    } else if let Some(name) = s.strip_prefix('$') {
         if !name.is_empty() && is_valid_simple_var(name) {
             return Some(name);
         }
