@@ -1,0 +1,19 @@
+[package]
+name = "operator-skills"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+operator-core = { path = "../operator-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = "0.9"
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+regex = "1"
+dirs = "6"
+
+[dev-dependencies]
+tempfile = "3"

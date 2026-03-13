@@ -140,6 +140,42 @@ impl fmt::Display for StepType {
     }
 }
 
+impl std::str::FromStr for StepType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "sys.open_app" => Ok(StepType::SysOpenApp),
+            "sys.open_url" => Ok(StepType::SysOpenUrl),
+            "sys.read_file" => Ok(StepType::SysReadFile),
+            "sys.write_file" => Ok(StepType::SysWriteFile),
+            "sys.append_file" => Ok(StepType::SysAppendFile),
+            "sys.mkdir" => Ok(StepType::SysMkdir),
+            "sys.move_path" => Ok(StepType::SysMovePath),
+            "sys.copy_path" => Ok(StepType::SysCopyPath),
+            "sys.delete_path" => Ok(StepType::SysDeletePath),
+            "sys.exec" => Ok(StepType::SysExec),
+            "sys.quit_app" => Ok(StepType::SysQuitApp),
+            "sys.clipboard_get" => Ok(StepType::SysClipboardGet),
+            "sys.clipboard_set" => Ok(StepType::SysClipboardSet),
+            "ui.check_accessibility_permission" => Ok(StepType::UiCheckAccessibilityPermission),
+            "ui.list_apps" => Ok(StepType::UiListApps),
+            "ui.focus_app" => Ok(StepType::UiFocusApp),
+            "ui.find" => Ok(StepType::UiFind),
+            "ui.click" => Ok(StepType::UiClick),
+            "ui.set_value" => Ok(StepType::UiSetValue),
+            "ui.type_text" => Ok(StepType::UiTypeText),
+            "ui.key_press" => Ok(StepType::UiKeyPress),
+            "ui.read_text" => Ok(StepType::UiReadText),
+            "ui.wait_for" => Ok(StepType::UiWaitFor),
+            "ui.select_menu" => Ok(StepType::UiSelectMenu),
+            "ui.list_windows" => Ok(StepType::UiListWindows),
+            "ui.focus_window" => Ok(StepType::UiFocusWindow),
+            _ => Err(format!("Unknown step type: {}", s)),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Mode
 // ---------------------------------------------------------------------------

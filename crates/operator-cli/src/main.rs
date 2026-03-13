@@ -152,6 +152,12 @@ enum Commands {
 
     /// Initialize config file at ~/.config/operator-jack/config.toml
     Init,
+
+    /// Skill management (M6)
+    Skill {
+        #[command(subcommand)]
+        action: SkillAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -180,6 +186,28 @@ enum PlanAction {
     Save {
         #[arg(long)]
         plan_file: std::path::PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum SkillAction {
+    /// List available skills
+    List,
+
+    /// Validate a skill manifest file
+    Validate {
+        /// Path to skill manifest file
+        skill_file: std::path::PathBuf,
+    },
+
+    /// Run a skill with parameters
+    Run {
+        /// Skill name
+        skill_name: String,
+
+        /// Parameters as key=value pairs
+        #[arg(long = "param", value_parser = parse_key_value)]
+        params: Vec<(String, String)>,
     },
 }
 
@@ -243,6 +271,14 @@ fn main() -> Result<()> {
             UiAction::Inspect { ref app, depth } => cmd_ui_inspect(&cli, app, *depth),
         },
         Commands::Init => cmd_init(&cli),
+        Commands::Skill { ref action } => match action {
+            SkillAction::List => cmd_skill_list(&cli),
+            SkillAction::Validate { ref skill_file } => cmd_skill_validate(&cli, skill_file),
+            SkillAction::Run {
+                ref skill_name,
+                ref params,
+            } => cmd_skill_run(&cli, skill_name, params),
+        },
     }
 }
 
@@ -1650,4 +1686,203 @@ fn cmd_init(_cli: &Cli) -> Result<()> {
 
     eprintln!("Created config file: {}", config_path.display());
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Skill command handlers (M6)
+// ---------------------------------------------------------------------------
+
+/// Parse a key=value string into a tuple.
+fn parse_key_value(s: &str) -> Result<(String, String), String> {
+    s.split_once('=')
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .ok_or_else(|| format!("Expected key=value format, got: {}", s))
+}
+
+/// List all available skills.
+fn cmd_skill_list(cli: &Cli) -> Result<()> {
+    use operator_skills::SkillRegistry;
+
+    let mut registry = SkillRegistry::new();
+    registry.discover().map_err(|e| anyhow::anyhow!("Failed to discover skills: {}", e))?;
+
+    let skills = registry.list();
+
+    if cli.json {
+        let obj = serde_json::json!({
+            "skills": skills.iter().map(|s| {
+                serde_json::json!({
+                    "name": s.name,
+                    "description": s.description,
+                    "version": s.version,
+                    "author": s.author,
+                    "parameters": s.parameters.len(),
+                    "steps": s.steps.len(),
+                })
+            }).collect::<Vec<_>>(),
+            "count": skills.len(),
+        });
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+    } else if skills.is_empty() {
+        println!("No skills found.");
+        println!();
+        println!("Skills are loaded from:");
+        for path in registry.search_paths() {
+            println!("  - {}", path.display());
+        }
+        println!();
+        println!("Create a skill file or run 'operator-jack skill validate <file>' to check a skill manifest.");
+    } else {
+        println!("Available skills ({}):", skills.len());
+        println!();
+        println!("{:<20} {:<30} PARAMETERS", "NAME", "DESCRIPTION");
+        println!("{}", "-".repeat(80));
+        for skill in skills {
+            let desc = skill.description.as_deref().unwrap_or("-");
+            let desc_short = if desc.len() > 28 { &desc[..28] } else { desc };
+            let params: Vec<_> = skill.parameters.iter().map(|p| p.name.clone()).collect();
+            let params_str = if params.is_empty() {
+                "none".to_string()
+            } else {
+                params.join(", ")
+            };
+            println!("{:<20} {:<30} {}", skill.name, desc_short, params_str);
+        }
+        println!();
+        println!("Run a skill with: operator-jack skill run <name> --param key=value");
+    }
+
+    Ok(())
+}
+
+/// Validate a skill manifest file.
+fn cmd_skill_validate(cli: &Cli, skill_file: &Path) -> Result<()> {
+    use operator_skills::SkillRegistry;
+
+    let registry = SkillRegistry::new();
+    match registry.load_from_path(skill_file) {
+        Ok(manifest) => {
+            if cli.json {
+                let obj = serde_json::json!({
+                    "valid": true,
+                    "name": manifest.name,
+                    "description": manifest.description,
+                    "version": manifest.version,
+                    "author": manifest.author,
+                    "parameters": manifest.parameters.len(),
+                    "steps": manifest.steps.len(),
+                });
+                println!("{}", serde_json::to_string_pretty(&obj)?);
+            } else {
+                println!("✓ Skill manifest is valid: {}", manifest.name);
+                if let Some(ref desc) = manifest.description {
+                    println!("  Description: {}", desc);
+                }
+                println!("  Parameters: {}", manifest.parameters.len());
+                for param in &manifest.parameters {
+                    let req = if param.required { "required" } else { "optional" };
+                    println!("    - {} ({:?}, {})", param.name, param.param_type, req);
+                }
+                println!("  Steps: {}", manifest.steps.len());
+            }
+            Ok(())
+        }
+        Err(e) => {
+            if cli.json {
+                let obj = serde_json::json!({
+                    "valid": false,
+                    "error": e.to_string(),
+                });
+                println!("{}", serde_json::to_string_pretty(&obj)?);
+            } else {
+                eprintln!("✗ Skill validation failed: {}", e);
+            }
+            std::process::exit(2);
+        }
+    }
+}
+
+/// Run a skill with parameters.
+fn cmd_skill_run(
+    cli: &Cli,
+    skill_name: &str,
+    params: &[(String, String)],
+) -> Result<()> {
+    use operator_skills::{SkillRegistry, registry::ensure_user_skills_dir};
+    use std::collections::HashMap;
+
+    // Ensure user skills dir exists (creates it if not present)
+    let _ = ensure_user_skills_dir();
+
+    let mut registry = SkillRegistry::new();
+    registry.discover().map_err(|e| anyhow::anyhow!("Failed to discover skills: {}", e))?;
+
+    let manifest = registry.get(skill_name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Skill '{}' not found. Run 'operator-jack skill list' to see available skills.",
+            skill_name
+        )
+    })?;
+
+    // Convert params to HashMap
+    let params_map: HashMap<String, String> = params.iter().cloned().collect();
+
+    // Resolve parameters
+    let resolved = manifest.resolve(params_map).map_err(|e| {
+        anyhow::anyhow!("Failed to resolve skill parameters: {}", e)
+    })?;
+
+    // Expand to plan
+    let plan = resolved.to_plan().map_err(|e| {
+        anyhow::anyhow!("Failed to expand skill to plan: {}", e)
+    })?;
+
+    // Execute the plan (same logic as cmd_run)
+    let store = open_store()?;
+    let plan_id = store
+        .save_plan(&plan)
+        .context("failed to save plan to store")?;
+
+    if !cli.quiet && !cli.json {
+        println!("Skill '{}' expanded to plan: {}", skill_name, plan_id);
+    }
+
+    let config = build_engine_config(cli)?;
+    let data_dir = resolve_data_dir();
+
+    let store2 = open_store()?;
+    let mut engine = Engine::new(store2, config);
+
+    let cancel_flag: Arc<AtomicBool> = engine.cancel_flag();
+    let flag_clone = Arc::clone(&cancel_flag);
+    let _ = set_ctrlc_handler(flag_clone);
+
+    let data_dir_clone = data_dir.clone();
+    engine.set_on_run_created(move |run_id| {
+        let _ = write_pid_file(&data_dir_clone, run_id);
+    });
+
+    let result = engine.execute_plan(&plan_id);
+
+    let _ = remove_pid_file(&data_dir);
+
+    match result {
+        Ok(summary) => {
+            print_run_summary(cli, &summary);
+            let code = exit_code_for_status(&summary.status);
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
+        Err(e) => {
+            if cli.json {
+                let obj = serde_json::json!({ "error": e.to_string() });
+                println!("{}", serde_json::to_string_pretty(&obj)?);
+            } else {
+                eprintln!("Execution failed: {}", e);
+            }
+            std::process::exit(1);
+        }
+    }
 }

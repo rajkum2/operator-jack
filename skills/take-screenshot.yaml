@@ -1,0 +1,23 @@
+schema_version: 1
+name: take-screenshot
+description: Take a screenshot using the system screenshot shortcut
+version: "1.0.0"
+author: Operator Jack
+
+parameters:
+  - name: mode
+    type: string
+    required: false
+    default: "full"
+    allowed_values: ["full", "window", "selection"]
+    description: Screenshot mode - full screen, active window, or selection
+
+steps:
+  - id: screenshot
+    type: ui.key_press
+    params:
+      keys:
+        - "command"
+        - "shift"
+        - "3"
+    description: Take a full screenshot (saved to desktop)

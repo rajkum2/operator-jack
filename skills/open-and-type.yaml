@@ -1,0 +1,53 @@
+schema_version: 1
+name: open-and-type
+description: Open an application and type text into it
+version: "1.0.0"
+author: Operator Jack
+
+parameters:
+  - name: app
+    type: string
+    required: true
+    description: The application to open (e.g., Notes, TextEdit)
+  
+  - name: text
+    type: string
+    required: true
+    description: The text to type
+  
+  - name: wait_ms
+    type: integer
+    required: false
+    default: 2000
+    description: Milliseconds to wait for the app to open
+
+steps:
+  - id: open_app
+    type: sys.open_app
+    params:
+      app: ${app}
+    description: Open the target application
+  
+  - id: wait_for_app
+    type: ui.wait_for
+    params:
+      app: ${app}
+      selector:
+        role: AXWindow
+      timeout_ms: ${wait_ms}
+    description: Wait for the app window to appear
+  
+  - id: focus_app
+    type: ui.focus_app
+    params:
+      app: ${app}
+    description: Ensure the app is focused
+  
+  - id: type_text
+    type: ui.type_text
+    params:
+      app: ${app}
+      selector:
+        role: AXTextArea
+      text: ${text}
+    description: Type the provided text

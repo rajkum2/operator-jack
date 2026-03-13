@@ -1,0 +1,67 @@
+schema_version: 1
+name: create-note
+description: Create a new note in the Notes app with the given content
+version: "1.0.0"
+author: Operator Jack
+
+parameters:
+  - name: title
+    type: string
+    required: true
+    description: The title for the note
+  
+  - name: body
+    type: string
+    required: false
+    default: ""
+    description: The body content of the note
+
+steps:
+  - id: open_notes
+    type: sys.open_app
+    params:
+      app: Notes
+  
+  - id: wait_for_notes
+    type: ui.wait_for
+    params:
+      app: Notes
+      selector:
+        role: AXWindow
+      timeout_ms: 3000
+  
+  - id: new_note
+    type: ui.select_menu
+    params:
+      app: Notes
+      path: [File, New Note]
+  
+  - id: wait_for_editor
+    type: ui.wait_for
+    params:
+      app: Notes
+      selector:
+        role: AXTextArea
+      timeout_ms: 2000
+  
+  - id: type_content
+    type: ui.type_text
+    params:
+      app: Notes
+      selector:
+        role: AXTextArea
+      text: ${title}
+
+  - id: press_return
+    type: ui.key_press
+    params:
+      app: Notes
+      keys: [Return, Return]
+
+  - id: type_body
+    type: ui.type_text
+    params:
+      app: Notes
+      selector:
+        role: AXTextArea
+      text: ${body}
