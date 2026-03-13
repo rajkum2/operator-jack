@@ -158,6 +158,12 @@ enum Commands {
         #[command(subcommand)]
         action: SkillAction,
     },
+
+    /// Browser automation (M5)
+    Browser {
+        #[command(subcommand)]
+        action: BrowserAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -208,6 +214,44 @@ enum SkillAction {
         /// Parameters as key=value pairs
         #[arg(long = "param", value_parser = parse_key_value)]
         params: Vec<(String, String)>,
+    },
+}
+
+#[derive(Subcommand)]
+enum BrowserAction {
+    /// Check if Chrome is available
+    Doctor,
+
+    /// Launch Chrome with remote debugging
+    Launch {
+        /// Port for remote debugging (default: 9222)
+        #[arg(long, default_value = "9222")]
+        port: u16,
+    },
+
+    /// Navigate to a URL
+    Navigate {
+        /// URL to navigate to
+        url: String,
+
+        /// Chrome debugging port
+        #[arg(long, default_value = "9222")]
+        port: u16,
+    },
+
+    /// Take a screenshot
+    Screenshot {
+        /// Output file path
+        #[arg(long)]
+        output: std::path::PathBuf,
+
+        /// Capture full page
+        #[arg(long)]
+        full_page: bool,
+
+        /// Chrome debugging port
+        #[arg(long, default_value = "9222")]
+        port: u16,
     },
 }
 
@@ -278,6 +322,14 @@ fn main() -> Result<()> {
                 ref skill_name,
                 ref params,
             } => cmd_skill_run(&cli, skill_name, params),
+        },
+        Commands::Browser { ref action } => match action {
+            BrowserAction::Doctor => cmd_browser_doctor(&cli),
+            BrowserAction::Launch { port } => cmd_browser_launch(&cli, *port),
+            BrowserAction::Navigate { url, port } => cmd_browser_navigate(&cli, url, *port),
+            BrowserAction::Screenshot { output, full_page, port } => {
+                cmd_browser_screenshot(&cli, output, *full_page, *port)
+            }
         },
     }
 }
@@ -1885,4 +1937,98 @@ fn cmd_skill_run(
             std::process::exit(1);
         }
     }
+}
+
+
+// ---------------------------------------------------------------------------
+// Browser command handlers (M5)
+// ---------------------------------------------------------------------------
+
+/// Check browser availability.
+fn cmd_browser_doctor(cli: &Cli) -> Result<()> {
+    let available = operator_exec_browser::is_chrome_available();
+
+    if cli.json {
+        let obj = serde_json::json!({
+            "chrome_available": available,
+        });
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+    } else if available {
+        println!("✓ Chrome is available");
+    } else {
+        println!("✗ Chrome not found");
+        println!("Install Chrome or Chromium to use browser automation.");
+    }
+    Ok(())
+}
+
+/// Launch Chrome with remote debugging.
+async fn cmd_browser_launch_async(_cli: &Cli, port: u16) -> Result<()> {
+    let mut child = operator_exec_browser::launch_chrome(port).await?;
+    
+    println!("Chrome launched with remote debugging on port {}", port);
+    println!("Press Ctrl+C to stop");
+
+    // Wait for the process
+    tokio::signal::ctrl_c().await?;
+    
+    child.kill().await?;
+    println!("Chrome stopped");
+    
+    Ok(())
+}
+
+fn cmd_browser_launch(cli: &Cli, port: u16) -> Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(cmd_browser_launch_async(cli, port))
+}
+
+/// Navigate to a URL.
+async fn cmd_browser_navigate_async(_cli: &Cli, url: &str, port: u16) -> Result<()> {
+    use operator_exec_browser::{BrowserClient, discover_chrome_ws_url};
+    
+    let ws_url = discover_chrome_ws_url(port).await?;
+    let client = BrowserClient::connect(ws_url).await?;
+    
+    let frame_id = client.navigate(url).await?;
+    println!("Navigated to {} (frame: {})", url, frame_id);
+    
+    client.close().await;
+    Ok(())
+}
+
+fn cmd_browser_navigate(cli: &Cli, url: &str, port: u16) -> Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(cmd_browser_navigate_async(cli, url, port))
+}
+
+/// Take a screenshot.
+async fn cmd_browser_screenshot_async(
+    _cli: &Cli,
+    output: &std::path::Path,
+    full_page: bool,
+    port: u16,
+) -> Result<()> {
+    use operator_exec_browser::{BrowserClient, discover_chrome_ws_url};
+    
+    let ws_url = discover_chrome_ws_url(port).await?;
+    let client = BrowserClient::connect(ws_url).await?;
+    
+    let image_data = client.screenshot(full_page).await?;
+    std::fs::write(output, image_data)?;
+    
+    println!("Screenshot saved to {}", output.display());
+    
+    client.close().await;
+    Ok(())
+}
+
+fn cmd_browser_screenshot(
+    cli: &Cli,
+    output: &std::path::Path,
+    full_page: bool,
+    port: u16,
+) -> Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(cmd_browser_screenshot_async(cli, output, full_page, port))
 }

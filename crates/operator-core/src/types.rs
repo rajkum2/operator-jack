@@ -65,6 +65,26 @@ pub enum StepType {
     UiListWindows,
     #[serde(rename = "ui.focus_window")]
     UiFocusWindow,
+
+    // Browser lane (M5)
+    #[serde(rename = "browser.navigate")]
+    BrowserNavigate,
+    #[serde(rename = "browser.click")]
+    BrowserClick,
+    #[serde(rename = "browser.type")]
+    BrowserType,
+    #[serde(rename = "browser.get_text")]
+    BrowserGetText,
+    #[serde(rename = "browser.get_attribute")]
+    BrowserGetAttribute,
+    #[serde(rename = "browser.execute_js")]
+    BrowserExecuteJs,
+    #[serde(rename = "browser.screenshot")]
+    BrowserScreenshot,
+    #[serde(rename = "browser.wait_for")]
+    BrowserWaitFor,
+    #[serde(rename = "browser.scroll")]
+    BrowserScroll,
 }
 
 impl StepType {
@@ -98,6 +118,17 @@ impl StepType {
             | StepType::UiSelectMenu
             | StepType::UiListWindows
             | StepType::UiFocusWindow => "ui",
+
+            // Browser lane
+            StepType::BrowserNavigate
+            | StepType::BrowserClick
+            | StepType::BrowserType
+            | StepType::BrowserGetText
+            | StepType::BrowserGetAttribute
+            | StepType::BrowserExecuteJs
+            | StepType::BrowserScreenshot
+            | StepType::BrowserWaitFor
+            | StepType::BrowserScroll => "browser",
         }
     }
 
@@ -130,6 +161,16 @@ impl StepType {
             StepType::UiSelectMenu => "ui.select_menu",
             StepType::UiListWindows => "ui.list_windows",
             StepType::UiFocusWindow => "ui.focus_window",
+            // Browser lane
+            StepType::BrowserNavigate => "browser.navigate",
+            StepType::BrowserClick => "browser.click",
+            StepType::BrowserType => "browser.type",
+            StepType::BrowserGetText => "browser.get_text",
+            StepType::BrowserGetAttribute => "browser.get_attribute",
+            StepType::BrowserExecuteJs => "browser.execute_js",
+            StepType::BrowserScreenshot => "browser.screenshot",
+            StepType::BrowserWaitFor => "browser.wait_for",
+            StepType::BrowserScroll => "browser.scroll",
         }
     }
 }
@@ -171,6 +212,16 @@ impl std::str::FromStr for StepType {
             "ui.select_menu" => Ok(StepType::UiSelectMenu),
             "ui.list_windows" => Ok(StepType::UiListWindows),
             "ui.focus_window" => Ok(StepType::UiFocusWindow),
+            // Browser lane
+            "browser.navigate" => Ok(StepType::BrowserNavigate),
+            "browser.click" => Ok(StepType::BrowserClick),
+            "browser.type" => Ok(StepType::BrowserType),
+            "browser.get_text" => Ok(StepType::BrowserGetText),
+            "browser.get_attribute" => Ok(StepType::BrowserGetAttribute),
+            "browser.execute_js" => Ok(StepType::BrowserExecuteJs),
+            "browser.screenshot" => Ok(StepType::BrowserScreenshot),
+            "browser.wait_for" => Ok(StepType::BrowserWaitFor),
+            "browser.scroll" => Ok(StepType::BrowserScroll),
             _ => Err(format!("Unknown step type: {}", s)),
         }
     }

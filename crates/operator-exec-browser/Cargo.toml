@@ -1,0 +1,41 @@
+[package]
+name = "operator-exec-browser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+operator-core = { path = "../operator-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Async utilities
+futures-util = "0.3"
+
+# WebSocket client for CDP
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+
+# HTTP client for Chrome discovery
+reqwest = { version = "0.11", features = ["json"] }
+
+# URL parsing
+url = "2"
+
+# Base64 for screenshots
+base64 = "0.22"
+
+# Image processing (optional, for screenshot validation)
+image = { version = "0.24", optional = true }
+
+[features]
+default = []
+image-processing = ["dep:image"]
+
+[dev-dependencies]
+tokio-test = "0.4"

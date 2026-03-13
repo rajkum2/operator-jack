@@ -5,6 +5,7 @@ members = [
     "crates/operator-store",
     "crates/operator-runtime",
     "crates/operator-exec-system",
+    "crates/operator-exec-browser",
     "crates/operator-ipc",
     "crates/operator-planner",
     "crates/operator-skills",

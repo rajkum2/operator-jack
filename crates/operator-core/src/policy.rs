@@ -47,7 +47,21 @@ pub fn risk_level(step_type: &StepType) -> RiskLevel {
         | StepType::UiTypeText
         | StepType::UiKeyPress
         | StepType::UiSelectMenu
-        | StepType::UiFocusWindow => RiskLevel::Medium,
+        | StepType::UiFocusWindow
+        // Browser lane
+        | StepType::BrowserNavigate
+        | StepType::BrowserClick
+        | StepType::BrowserType
+        | StepType::BrowserGetText
+        | StepType::BrowserGetAttribute
+        | StepType::BrowserWaitFor
+        | StepType::BrowserScroll => RiskLevel::Medium,
+
+        // Browser high risk
+        StepType::BrowserExecuteJs => RiskLevel::High,
+
+        // Browser low risk
+        StepType::BrowserScreenshot => RiskLevel::Low,
     }
 }
 

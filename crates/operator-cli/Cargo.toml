@@ -14,6 +14,7 @@ operator-store = { path = "../operator-store" }
 operator-ipc = { path = "../operator-ipc" }
 operator-planner = { path = "../operator-planner" }
 operator-skills = { path = "../operator-skills" }
+operator-exec-browser = { path = "../operator-exec-browser" }
 clap = { version = "4", features = ["derive"] }
 anyhow.workspace = true
 serde_json.workspace = true
@@ -22,3 +23,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "6"
 chrono.workspace = true
 ulid.workspace = true
+tokio = { version = "1", features = ["full"] }

@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "name": "Browser navigation test",
+  "description": "Navigate to a website and take a screenshot",
+  "mode": "safe",
+  "allow_domains": ["example.com"],
+  "steps": [
+    {
+      "id": "navigate",
+      "type": "browser.navigate",
+      "params": {
+        "url": "https://example.com",
+        "wait_ms": 2000
+      }
+    },
+    {
+      "id": "screenshot",
+      "type": "browser.screenshot",
+      "params": {
+        "full_page": false
+      }
+    }
+  ]
+}
