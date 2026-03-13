@@ -237,6 +237,13 @@
 - [x] Interactive provider selection UI
 - [x] Plan preview (`--show-plan`) and save (`--save-plan`) options
 - [x] 108 tests passing (12 new planner tests)
+- [x] SPEC_FREEZE_V0.5.md (M6 spec)
+- [x] operator-skills crate with manifest parsing and expansion
+- [x] Skill registry for discovering skills from multiple paths
+- [x] Parameter validation and interpolation
+- [x] CLI commands: skill list, validate, run
+- [x] Example skills: open-and-type, create-note, take-screenshot
+- [x] 113 tests passing (5 new skill tests)
 
 ### Milestone Status
 
@@ -250,7 +257,7 @@
 | Phase A | DONE | Production packaging: binary rename, config system, Makefile, CI, Homebrew, install script, LICENSE, CHANGELOG, enhanced doctor |
 | M4 | DONE | Rule-based planner (natural language → typed steps) |
 | M5 | NOT STARTED | Browser executor (CDP) |
-| M6 | NOT STARTED | Skills system (macros) |
+| M6 | DONE | Skills system (macros) |
 | M7 | NOT STARTED | Robustness + recovery |
 | M8 | NOT STARTED | Offline STT input |
 
