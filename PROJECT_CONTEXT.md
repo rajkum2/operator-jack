@@ -256,7 +256,7 @@
 | M3b | DONE | UI executor v1 polish: selectMenu, setValue, inspect, anyOf selectors, element_ref, evidence hooks |
 | Phase A | DONE | Production packaging: binary rename, config system, Makefile, CI, Homebrew, install script, LICENSE, CHANGELOG, enhanced doctor |
 | M4 | DONE | Rule-based planner (natural language → typed steps) |
-| M5 | NOT STARTED | Browser executor (CDP) |
+| M5 | DONE | Browser executor (CDP) |
 | M6 | DONE | Skills system (macros) |
 | M7 | NOT STARTED | Robustness + recovery |
 | M8 | NOT STARTED | Offline STT input |
