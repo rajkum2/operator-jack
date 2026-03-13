@@ -18,9 +18,10 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-use operator_core::config::OperatorConfig;
+use operator_core::config::{OperatorConfig, ProviderSettings};
 use operator_core::types::{Mode, Plan, RunStatus};
 use operator_core::validation::validate_plan;
+use operator_planner::{Planner, PlannerConfig as PlannerPlannerConfig, ProviderConfig, ProviderType};
 use operator_runtime::engine::{Engine, EngineConfig, RunSummary};
 use operator_store::Store;
 
@@ -108,6 +109,24 @@ enum Commands {
 
         /// Inline instruction or json:{...}
         instruction: Option<String>,
+    },
+
+    /// Execute a natural language instruction
+    Do {
+        /// Natural language instruction (e.g., "open Notes and type hello")
+        instruction: Vec<String>,
+
+        /// LLM provider to use (kimi, openai, anthropic, ollama)
+        #[arg(long)]
+        provider: Option<String>,
+
+        /// Show the generated plan without executing
+        #[arg(long)]
+        show_plan: bool,
+
+        /// Save the generated plan to a file
+        #[arg(long)]
+        save_plan: Option<std::path::PathBuf>,
     },
 
     /// View run logs
@@ -204,6 +223,18 @@ fn main() -> Result<()> {
             ref plan_file,
             ref instruction,
         } => cmd_run(&cli, plan_file.clone(), instruction.clone()),
+        Commands::Do {
+            ref instruction,
+            ref provider,
+            show_plan,
+            ref save_plan,
+        } => cmd_do(
+            &cli,
+            instruction.join(" "),
+            provider.clone(),
+            *show_plan,
+            save_plan.clone(),
+        ),
         Commands::Logs { ref run_id, full } => cmd_logs(&cli, run_id.clone(), *full),
         Commands::Stop => cmd_stop(&cli),
         Commands::Ui { ref action } => match action {
@@ -608,6 +639,248 @@ fn cmd_run(cli: &Cli, plan_file: Option<PathBuf>, instruction: Option<String>) -
             }
             std::process::exit(1);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// cmd_do — natural language to plan generation and execution
+// ---------------------------------------------------------------------------
+
+/// Converts a natural language instruction to a plan using an LLM provider,
+/// then optionally executes it.
+fn cmd_do(
+    cli: &Cli,
+    instruction: String,
+    provider_override: Option<String>,
+    show_plan_only: bool,
+    save_plan_path: Option<PathBuf>,
+) -> Result<()> {
+    if instruction.trim().is_empty() {
+        if cli.json {
+            let obj = serde_json::json!({ "error": "Empty instruction provided" });
+            println!("{}", serde_json::to_string_pretty(&obj)?);
+        } else {
+            eprintln!("Error: Please provide a natural language instruction.");
+            eprintln!("Example: operator-jack do \"open Notes and type hello\"");
+        }
+        std::process::exit(6);
+    }
+
+    // Load config
+    let cfg = OperatorConfig::load().unwrap_or_else(|e| {
+        tracing::warn!("failed to load config: {e}, using defaults");
+        OperatorConfig::default()
+    });
+
+    // Build planner config from operator-core config
+    let planner_config = build_planner_config(&cfg);
+
+    // Create planner
+    let planner = Planner::new(planner_config);
+
+    // Determine provider
+    let provider_type = if let Some(p) = provider_override {
+        match p.parse::<ProviderType>() {
+            Ok(pt) => pt,
+            Err(e) => {
+                if cli.json {
+                    let obj = serde_json::json!({ "error": e });
+                    println!("{}", serde_json::to_string_pretty(&obj)?);
+                } else {
+                    eprintln!("Error: {}", e);
+                    eprintln!("Valid providers: kimi, openai, anthropic, ollama");
+                }
+                std::process::exit(6);
+            }
+        }
+    } else if let Ok(env_provider) = std::env::var("OPERATOR_DEFAULT_PROVIDER") {
+        env_provider.parse::<ProviderType>().unwrap_or_else(|_| {
+            planner.first_available_provider().unwrap_or(ProviderType::Ollama)
+        })
+    } else if let Some(first_available) = planner.first_available_provider() {
+        first_available
+    } else {
+        // Interactive selection if TTY
+        if atty_is_interactive() {
+            match operator_planner::select_provider_interactive(&planner) {
+                Some(pt) => pt,
+                None => {
+                    if cli.json {
+                        let obj = serde_json::json!({ "error": "No provider selected" });
+                        println!("{}", serde_json::to_string_pretty(&obj)?);
+                    } else {
+                        eprintln!("No provider selected. Exiting.");
+                    }
+                    std::process::exit(6);
+                }
+            }
+        } else {
+            if cli.json {
+                let obj = serde_json::json!({ 
+                    "error": "No LLM provider available. Set an API key or start Ollama." 
+                });
+                println!("{}", serde_json::to_string_pretty(&obj)?);
+            } else {
+                eprintln!("No LLM provider available.");
+                eprintln!();
+                eprintln!("Options:");
+                eprintln!("  1. Set an API key environment variable:");
+                eprintln!("     - KIMI_API_KEY for Kimi");
+                eprintln!("     - OPENAI_API_KEY for OpenAI");
+                eprintln!("     - ANTHROPIC_API_KEY for Anthropic");
+                eprintln!("  2. Start Ollama locally:");
+                eprintln!("     - ollama pull llama3.2");
+                eprintln!("     - ollama serve");
+                eprintln!("  3. Use --provider to specify which provider to use");
+            }
+            std::process::exit(6);
+        }
+    };
+
+    if !cli.quiet && !cli.json {
+        println!("Generating plan using {}...", provider_type.display_name());
+    }
+
+    // Generate plan
+    let plan = match planner.plan_with_provider(&instruction, provider_type) {
+        Ok(p) => p,
+        Err(e) => {
+            if cli.json {
+                let obj = serde_json::json!({ "error": e.to_string() });
+                println!("{}", serde_json::to_string_pretty(&obj)?);
+            } else {
+                eprintln!("Failed to generate plan: {}", e);
+                if e.is_retryable() {
+                    eprintln!("This error may be temporary. Please try again.");
+                }
+            }
+            std::process::exit(1);
+        }
+    };
+
+    // Save plan if requested
+    if let Some(path) = save_plan_path {
+        let plan_json = serde_json::to_string_pretty(&plan)?;
+        fs::write(&path, plan_json)
+            .with_context(|| format!("failed to write plan to: {}", path.display()))?;
+        if !cli.quiet && !cli.json {
+            println!("Plan saved to: {}", path.display());
+        }
+    }
+
+    // Show plan and exit if --show-plan
+    if show_plan_only {
+        if cli.json {
+            println!("{}", serde_json::to_string_pretty(&plan)?);
+        } else {
+            println!("\nGenerated Plan: {}", plan.name);
+            println!("Description: {}", plan.description.as_deref().unwrap_or("N/A"));
+            println!("Steps ({}):", plan.steps.len());
+            for (i, step) in plan.steps.iter().enumerate() {
+                println!("  {}. {} - {:?}", i + 1, step.id, step.step_type);
+            }
+            println!();
+            println!("Full JSON:");
+            println!("{}", serde_json::to_string_pretty(&plan)?);
+        }
+        return Ok(());
+    }
+
+    // Validate the generated plan
+    if let Err(errors) = validate_plan(&plan) {
+        if cli.json {
+            let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+            let obj = serde_json::json!({ 
+                "error": "Generated plan failed validation",
+                "validation_errors": msgs 
+            });
+            println!("{}", serde_json::to_string_pretty(&obj)?);
+        } else {
+            eprintln!("Generated plan failed validation:");
+            for err in &errors {
+                eprintln!("  - {}", err);
+            }
+            eprintln!();
+            eprintln!("You can view the raw plan with: operator-jack do \"{}\" --show-plan", instruction);
+        }
+        std::process::exit(2);
+    }
+
+    // Save and execute the plan (similar to cmd_run)
+    let store = open_store()?;
+    let plan_id = store
+        .save_plan(&plan)
+        .context("failed to save plan to store")?;
+
+    if !cli.quiet && !cli.json {
+        println!("Plan saved: {}", plan_id);
+    }
+
+    // Execute
+    let config = build_engine_config(cli)?;
+    let data_dir = resolve_data_dir();
+
+    let store2 = open_store()?;
+    let mut engine = Engine::new(store2, config);
+
+    let cancel_flag: Arc<AtomicBool> = engine.cancel_flag();
+    let flag_clone = Arc::clone(&cancel_flag);
+    let _ = set_ctrlc_handler(flag_clone);
+
+    let data_dir_clone = data_dir.clone();
+    engine.set_on_run_created(move |run_id| {
+        let _ = write_pid_file(&data_dir_clone, run_id);
+    });
+
+    let result = engine.execute_plan(&plan_id);
+
+    let _ = remove_pid_file(&data_dir);
+
+    match result {
+        Ok(summary) => {
+            print_run_summary(cli, &summary);
+            let code = exit_code_for_status(&summary.status);
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
+        Err(e) => {
+            if cli.json {
+                let obj = serde_json::json!({ "error": e.to_string() });
+                println!("{}", serde_json::to_string_pretty(&obj)?);
+            } else {
+                eprintln!("Execution failed: {}", e);
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Builds planner configuration from operator-core config.
+fn build_planner_config(cfg: &OperatorConfig) -> PlannerPlannerConfig {
+    PlannerPlannerConfig {
+        provider: cfg.default_provider.parse::<ProviderType>().unwrap_or(ProviderType::Ollama),
+        kimi: convert_provider_settings(&cfg.planner.kimi, "KIMI_API_KEY"),
+        openai: convert_provider_settings(&cfg.planner.openai, "OPENAI_API_KEY"),
+        anthropic: convert_provider_settings(&cfg.planner.anthropic, "ANTHROPIC_API_KEY"),
+        ollama: convert_provider_settings(&cfg.planner.ollama, ""),
+    }
+}
+
+/// Converts operator-core ProviderSettings to operator-planner ProviderConfig.
+fn convert_provider_settings(settings: &ProviderSettings, env_var: &str) -> ProviderConfig {
+    ProviderConfig {
+        api_key: if env_var.is_empty() {
+            None // Ollama doesn't need API key
+        } else {
+            std::env::var(env_var).ok()
+        },
+        base_url: settings.base_url.clone(),
+        model: settings.model.clone(),
+        max_tokens: settings.max_tokens,
+        temperature: settings.temperature,
+        timeout_seconds: settings.timeout_seconds,
     }
 }
 

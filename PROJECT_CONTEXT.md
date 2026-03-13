@@ -71,6 +71,21 @@
 
 ## VERSION_LOG
 
+### v0.5.0 — 2026-03-14
+**Status:** M4 Complete. Rule-based planner with multi-provider LLM support.
+**Changes:**
+1. Created `operator-planner` crate with provider abstraction trait
+2. Implemented Kimi (Moonshot AI) provider with `moonshot-v1-8k` default model
+3. Implemented OpenAI provider with `gpt-4o-mini` default model
+4. Implemented Anthropic provider with `claude-3-haiku` default model
+5. Implemented Ollama local provider with `llama3.2` default model
+6. Added `operator-jack do <instruction>` command for natural language execution
+7. Added interactive provider selection when multiple providers available
+8. Added `--provider`, `--show-plan`, `--save-plan` flags to `do` command
+9. Added planner configuration to `config.toml` with per-provider settings
+10. Added comprehensive prompt template for plan generation
+11. Added 12 new tests for planner module (108 total tests)
+
 ### v0.4.0 — 2026-03-04
 **Status:** Phase A complete. Production packaging & distribution. Binary renamed to `operator-jack`. 96 tests pass (5 new config tests).
 **Changes (Phase A):**
@@ -195,7 +210,7 @@
 - [x] SPEC_FREEZE_V0.1.md (archived)
 - [x] SPEC_FREEZE_V0.2.md (active spec)
 - [x] PROJECT_CONTEXT.md (this file)
-- [x] Rust workspace scaffolding (6 crates)
+- [x] Rust workspace scaffolding (7 crates)
 - [x] operator-core: types, validation, interpolation, redaction, events, policy
 - [x] operator-store: SQLite migrations, CRUD repos (12 unit tests passing)
 - [x] operator-ipc: protocol types, real IPC client with NDJSON framing
@@ -212,6 +227,16 @@
 - [x] Rust-side disambiguation UX for ELEMENT_AMBIGUOUS (interactive candidate selection)
 - [x] `operator-jack ui inspect` CLI command for AX tree debugging
 - [x] Phase A: production packaging (binary rename, config, Makefile, CI, Homebrew formula, install script, LICENSE, CHANGELOG, CONTRIBUTING, enhanced doctor)
+- [x] SPEC_FREEZE_V0.4.md (M4 spec)
+- [x] operator-planner crate with provider abstraction trait
+- [x] Kimi provider (Moonshot AI)
+- [x] OpenAI provider
+- [x] Anthropic provider (Claude)
+- [x] Ollama provider (local LLM)
+- [x] `operator-jack do` command for natural language execution
+- [x] Interactive provider selection UI
+- [x] Plan preview (`--show-plan`) and save (`--save-plan`) options
+- [x] 108 tests passing (12 new planner tests)
 
 ### Milestone Status
 
@@ -223,7 +248,7 @@
 | M3a | DONE | UI executor v1 core: focusApp/Window, find, waitFor, click, typeText, readText, keyPress, disambiguation |
 | M3b | DONE | UI executor v1 polish: selectMenu, setValue, inspect, anyOf selectors, element_ref, evidence hooks |
 | Phase A | DONE | Production packaging: binary rename, config system, Makefile, CI, Homebrew, install script, LICENSE, CHANGELOG, enhanced doctor |
-| M4 | NOT STARTED | Rule-based planner (natural language → typed steps) |
+| M4 | DONE | Rule-based planner (natural language → typed steps) |
 | M5 | NOT STARTED | Browser executor (CDP) |
 | M6 | NOT STARTED | Skills system (macros) |
 | M7 | NOT STARTED | Robustness + recovery |
@@ -235,13 +260,12 @@
 
 **Immediate next steps (in order):**
 
-1. **Push to GitHub + tag v0.4.0** — trigger CI and first release
+1. **Push to GitHub + tag v0.5.0** — trigger CI and release
 2. **Create `rajkum2/homebrew-tap` repo** — publish the formula with release tarball SHA256
-3. **Build M4 (Rule-based Planner)** — `operator-jack do "open Notes and type hello"`
-4. **Build M6 (Skills System)** — `operator-jack skill run daily-standup --param title="Sprint 42"`
-5. **Build M5 (Browser/CDP)** — Chrome automation via DevTools Protocol
+3. **Build M6 (Skills System)** — `operator-jack skill run daily-standup --param title="Sprint 42"`
+4. **Build M5 (Browser/CDP)** — Chrome automation via DevTools Protocol
 
-**Before starting M4:** Ask user for confirmation and scope discussion.
+**M4 is COMPLETE.** Rule-based planner with multi-provider LLM support is implemented.
 
 ---
 
@@ -290,4 +314,4 @@ When multiple AX elements match and no `index` is given: interactive mode prompt
 
 ---
 
-*Last updated: 2026-03-04 — Phase A COMPLETE. Binary renamed to `operator-jack`. Production packaging: config system, Makefile, CI, Homebrew formula, install script, LICENSE, CHANGELOG, enhanced doctor. 96 Rust tests pass. Ready for M4.*
+*Last updated: 2026-03-14 — M4 COMPLETE. Rule-based planner with multi-provider LLM support (Kimi, OpenAI, Anthropic, Ollama). `operator-jack do` command for natural language execution. 108 tests passing. Ready for M5/M6.*

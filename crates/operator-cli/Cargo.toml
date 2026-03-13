@@ -12,6 +12,7 @@ operator-core = { path = "../operator-core" }
 operator-runtime = { path = "../operator-runtime" }
 operator-store = { path = "../operator-store" }
 operator-ipc = { path = "../operator-ipc" }
+operator-planner = { path = "../operator-planner" }
 clap = { version = "4", features = ["derive"] }
 anyhow.workspace = true
 serde_json.workspace = true

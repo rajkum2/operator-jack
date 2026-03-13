@@ -4,7 +4,7 @@ Operator Jack is a local-first, privacy-respecting command-line tool for automat
 
 ## Current Status
 
-**Milestone 3 (UI Executor v1) is complete.** The workspace structure, core types, plan validation, SQLite store, CLI skeleton, all 13 `sys.*` executors, 15 UI handlers via Swift helper, and real IPC are fully implemented with 91 tests passing. M4 (rule-based planner) is next.
+**Milestone 4 (Rule-based Planner) is complete.** All previous milestones plus natural language plan generation via LLM providers (Kimi, OpenAI, Anthropic, Ollama). 108 tests passing.
 
 ## Quick Start
 
@@ -20,6 +20,23 @@ Run the doctor command to check your environment:
 ```
 ./target/release/operator-jack doctor
 ```
+
+### Natural Language (M4)
+
+Execute a natural language instruction using an LLM provider:
+
+```
+# Using Ollama (local, no API key needed)
+ollama pull llama3.2
+ollama serve
+./target/release/operator-jack do "open Notes and type hello world"
+
+# Using other providers (requires API key)
+export KIMI_API_KEY="your-key-here"
+./target/release/operator-jack do "create a folder called Projects" --provider kimi
+```
+
+### Plan-based Execution
 
 Validate a plan file without executing it:
 
@@ -40,6 +57,17 @@ Dry-run a plan to see what would happen without performing any actions:
 ```
 
 ## CLI Commands
+
+### Natural Language (M4)
+
+| Command | Description |
+|---|---|
+| `operator-jack do "<instruction>"` | Execute a natural language instruction. |
+| `operator-jack do "<instruction>" --provider kimi` | Use specific LLM provider. |
+| `operator-jack do "<instruction>" --show-plan` | Show generated plan without executing. |
+| `operator-jack do "<instruction>" --save-plan plan.json` | Save generated plan to file. |
+
+### Plan-based Execution
 
 | Command | Description |
 |---|---|
@@ -92,7 +120,7 @@ More examples are available in [`docs/examples/`](docs/examples/):
 
 ## Project Structure
 
-Operator Jack is organized as a Cargo workspace with six crates:
+Operator Jack is organized as a Cargo workspace with seven crates:
 
 ```
 operator-jack/
@@ -104,6 +132,7 @@ operator-jack/
     operator-store/           # SQLite persistence, JSONL audit log
     operator-exec-system/     # sys.* executor (files, processes, URLs)
     operator-ipc/             # NDJSON stdio bridge to Swift macOS helper
+    operator-planner/         # Rule-based planner (M4) - LLM providers
   macos-helper/               # Swift helper binary for macOS Accessibility API
   skills/                     # Built-in skill manifests (M6)
   docs/

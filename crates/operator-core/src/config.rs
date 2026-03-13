@@ -42,6 +42,58 @@ pub struct OperatorConfig {
 
     /// Custom database path.
     pub db_path: Option<String>,
+
+    /// Default LLM provider for natural language planning.
+    /// Options: "kimi", "openai", "anthropic", "ollama"
+    pub default_provider: String,
+
+    /// LLM provider configuration.
+    #[serde(default)]
+    pub planner: PlannerConfig,
+}
+
+/// LLM provider configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PlannerConfig {
+    /// Kimi API configuration.
+    #[serde(default)]
+    pub kimi: ProviderSettings,
+    /// OpenAI API configuration.
+    #[serde(default)]
+    pub openai: ProviderSettings,
+    /// Anthropic API configuration.
+    #[serde(default)]
+    pub anthropic: ProviderSettings,
+    /// Ollama local configuration.
+    #[serde(default)]
+    pub ollama: ProviderSettings,
+}
+
+/// Settings for a specific LLM provider.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderSettings {
+    /// API base URL (optional).
+    pub base_url: Option<String>,
+    /// Model name (optional, uses provider default if not set).
+    pub model: Option<String>,
+    /// Maximum tokens to generate.
+    pub max_tokens: Option<u32>,
+    /// Temperature (0.0 - 2.0).
+    pub temperature: Option<f32>,
+    /// Request timeout in seconds.
+    pub timeout_seconds: Option<u64>,
+}
+
+impl Default for ProviderSettings {
+    fn default() -> Self {
+        Self {
+            base_url: None,
+            model: None,
+            max_tokens: Some(4096),
+            temperature: Some(0.2),
+            timeout_seconds: Some(60),
+        }
+    }
 }
 
 impl Default for OperatorConfig {
@@ -57,6 +109,8 @@ impl Default for OperatorConfig {
             allow_domains: Vec::new(),
             log_dir: None,
             db_path: None,
+            default_provider: "ollama".to_string(),
+            planner: PlannerConfig::default(),
         }
     }
 }
@@ -114,6 +168,9 @@ impl OperatorConfig {
                 self.default_step_timeout_ms = n;
             }
         }
+        if let Ok(v) = std::env::var("OPERATOR_DEFAULT_PROVIDER") {
+            self.default_provider = v;
+        }
     }
 
     /// Generates the default config file content with comments.
@@ -150,6 +207,39 @@ default_retry_backoff_ms = 1000
 
 # Custom database path (default: ~/Library/Application Support/operator-jack/operator-jack.db)
 # db_path = "/path/to/operator-jack.db"
+
+# Default LLM provider for natural language planning
+# Options: "kimi", "openai", "anthropic", "ollama"
+default_provider = "ollama"
+
+# LLM provider configuration (optional)
+[planner.kimi]
+# model = "moonshot-v1-8k"
+# base_url = "https://api.moonshot.cn/v1"
+# max_tokens = 4096
+# temperature = 0.2
+# timeout_seconds = 60
+
+[planner.openai]
+# model = "gpt-4o-mini"
+# base_url = "https://api.openai.com/v1"
+# max_tokens = 4096
+# temperature = 0.2
+# timeout_seconds = 60
+
+[planner.anthropic]
+# model = "claude-3-haiku-20240307"
+# base_url = "https://api.anthropic.com/v1"
+# max_tokens = 4096
+# temperature = 0.2
+# timeout_seconds = 60
+
+[planner.ollama]
+# model = "llama3.2"
+# base_url = "http://localhost:11434"
+# max_tokens = 4096
+# temperature = 0.2
+# timeout_seconds = 120
 "#
     }
 }

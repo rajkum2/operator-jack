@@ -41,7 +41,8 @@ operator-jack/
 │   ├── operator-runtime/    # Execution engine, policy gates, retry/timeout, disambiguation
 │   ├── operator-store/      # SQLite persistence (rusqlite + rusqlite_migration)
 │   ├── operator-exec-system/# sys.* step handlers (file ops, exec, clipboard)
-│   └── operator-ipc/        # NDJSON IPC client for Swift helper
+│   ├── operator-ipc/        # NDJSON IPC client for Swift helper
+│   └── operator-planner/    # Rule-based planner (M4) - LLM provider abstraction
 ├── macos-helper/            # Swift SPM package
 │   └── Sources/OperatorMacOSHelper/
 │       ├── main.swift       # NDJSON server loop, handler registration
@@ -52,7 +53,8 @@ operator-jack/
 ├── docs/
 │   ├── examples/            # Golden plan JSONs for acceptance testing
 │   └── *.md                 # Architecture, security, selectors, permissions, roadmap
-├── SPEC_FREEZE_V0.3.md     # Active spec delta (M3 additions)
+├── SPEC_FREEZE_V0.4.md     # Active spec delta (M4 additions - natural language planner)
+├── SPEC_FREEZE_V0.3.md     # M3 spec (UI executor v1)
 ├── SPEC_FREEZE_V0.2.md     # Base normative spec (M0-M3)
 ├── PROJECT_CONTEXT.md       # State tracker, version log, resume file
 └── CLAUDE.md                # This file
@@ -117,7 +119,7 @@ operator-jack/
 | M2 | DONE | Swift helper v1, NDJSON IPC, ping/accessibility/listApps |
 | M3a | DONE | 9 UI handlers (focus, find, wait, click, type, read, keyPress), disambiguation, 85 tests |
 | M3b | DONE | selectMenu, setValue, inspect, anyOf, element_ref, evidence hooks, 91 tests |
-| M4 | NOT STARTED | Rule-based planner (natural language → typed steps) |
+| M4 | DONE | Rule-based planner (natural language → typed steps) |
 | M5 | NOT STARTED | Browser executor (CDP) |
 | M6-M8 | NOT STARTED | Skills, robustness, STT |
 
@@ -154,6 +156,15 @@ operator-jack/
 
 ## CLI Commands
 
+### Natural Language (M4)
+```
+operator-jack do "open Notes and type hello"      # Natural language execution
+operator-jack do "..." --provider kimi            # Use specific LLM provider
+operator-jack do "..." --show-plan                # Preview generated plan
+operator-jack do "..." --save-plan plan.json      # Save generated plan
+```
+
+### Plan-based Execution
 ```
 operator-jack doctor                    # Environment health check
 operator-jack run --plan-file <path>    # Validate + execute a plan
@@ -164,6 +175,7 @@ operator-jack plan save --plan-file <path>
 operator-jack logs [run-id] [--full]
 operator-jack stop
 operator-jack ui inspect --app <name> [--depth N]
+operator-jack init                      # Create config file
 ```
 
 ## Common Flags

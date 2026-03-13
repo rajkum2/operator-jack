@@ -1,0 +1,27 @@
+[package]
+name = "operator-planner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+operator-core = { path = "../operator-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+ulid = { workspace = true }
+tracing = { workspace = true }
+
+# HTTP client (synchronous - no async until M5)
+ureq = { version = "2", features = ["json"] }
+
+# For API key keychain storage (optional, macOS only)
+security-framework = { version = "2", optional = true }
+
+[features]
+default = ["keychain"]
+keychain = ["dep:security-framework"]
+
+[dev-dependencies]
+tempfile = "3"

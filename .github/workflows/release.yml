@@ -37,4 +37,4 @@ jobs:
           generate_release_notes: true
           files: |
             dist/operator-jack-*.tar.gz
-            dist/operator-jack-*.sha256
+            dist/operator-jack-*.tar.gz.sha256
