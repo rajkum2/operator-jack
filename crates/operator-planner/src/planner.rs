@@ -72,11 +72,6 @@ impl Planner {
         Self { config }
     }
 
-    /// Creates a planner with default configuration.
-    pub fn default() -> Self {
-        Self::new(PlannerConfig::default())
-    }
-
     /// Generates a plan from a natural language instruction using the default provider.
     pub fn plan(&self, instruction: &str) -> Result<Plan, PlannerError> {
         self.plan_with_provider(instruction, self.config.provider)
@@ -88,7 +83,10 @@ impl Planner {
         instruction: &str,
         provider_type: ProviderType,
     ) -> Result<Plan, PlannerError> {
-        info!("Generating plan using {} provider", provider_type.display_name());
+        info!(
+            "Generating plan using {} provider",
+            provider_type.display_name()
+        );
 
         let provider = self.create_provider(provider_type)?;
         provider.generate_plan(instruction)
@@ -137,7 +135,10 @@ impl Planner {
     }
 
     /// Creates a provider instance from the configuration.
-    fn create_provider(&self, provider_type: ProviderType) -> Result<Box<dyn LlmProvider>, PlannerError> {
+    fn create_provider(
+        &self,
+        provider_type: ProviderType,
+    ) -> Result<Box<dyn LlmProvider>, PlannerError> {
         match provider_type {
             ProviderType::Kimi => {
                 use crate::kimi::KimiProvider;
@@ -149,13 +150,22 @@ impl Planner {
             }
             ProviderType::Anthropic => {
                 use crate::anthropic::AnthropicProvider;
-                Ok(Box::new(AnthropicProvider::new(self.config.anthropic.clone())?))
+                Ok(Box::new(AnthropicProvider::new(
+                    self.config.anthropic.clone(),
+                )?))
             }
             ProviderType::Ollama => {
                 use crate::ollama::OllamaProvider;
                 Ok(Box::new(OllamaProvider::new(self.config.ollama.clone())))
             }
         }
+    }
+}
+
+impl Default for Planner {
+    /// Creates a planner with default configuration.
+    fn default() -> Self {
+        Self::new(PlannerConfig::default())
     }
 }
 

@@ -27,10 +27,7 @@ impl OllamaProvider {
     }
 
     fn model(&self) -> &str {
-        self.config
-            .model
-            .as_deref()
-            .unwrap_or("llama3.2")
+        self.config.model.as_deref().unwrap_or("llama3.2")
     }
 
     fn extract_plan_from_response(&self, text: &str) -> Result<Plan, PlannerError> {
@@ -38,14 +35,14 @@ impl OllamaProvider {
         let json_str = if let Some(start) = text.find("```json") {
             let after_start = &text[start + 7..];
             if let Some(end) = after_start.find("```") {
-                &after_start[..end].trim()
+                after_start[..end].trim()
             } else {
                 text.trim()
             }
         } else if let Some(start) = text.find("```") {
             let after_start = &text[start + 3..];
             if let Some(end) = after_start.find("```") {
-                &after_start[..end].trim()
+                after_start[..end].trim()
             } else {
                 text.trim()
             }
@@ -56,8 +53,7 @@ impl OllamaProvider {
         let plan: Plan = serde_json::from_str(json_str)
             .map_err(|e| PlannerError::ParseError(format!("Invalid JSON: {}", e)))?;
 
-        crate::prompt::validate_plan_structure(&plan)
-            .map_err(PlannerError::ParseError)?;
+        crate::prompt::validate_plan_structure(&plan).map_err(PlannerError::ParseError)?;
 
         Ok(plan)
     }
@@ -140,13 +136,11 @@ impl LlmProvider for OllamaProvider {
                         }
                     }
                 }
-                ureq::Error::Transport(e) => {
-                    PlannerError::ConnectionError(format!(
-                        "Cannot connect to Ollama at {}. Is it running? Error: {}",
-                        self.base_url(),
-                        e
-                    ))
-                }
+                ureq::Error::Transport(e) => PlannerError::ConnectionError(format!(
+                    "Cannot connect to Ollama at {}. Is it running? Error: {}",
+                    self.base_url(),
+                    e
+                )),
             })?;
 
         let ollama_response: OllamaResponse = response

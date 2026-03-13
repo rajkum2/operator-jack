@@ -33,10 +33,7 @@ impl KimiProvider {
     }
 
     fn model(&self) -> &str {
-        self.config
-            .model
-            .as_deref()
-            .unwrap_or("moonshot-v1-8k")
+        self.config.model.as_deref().unwrap_or("moonshot-v1-8k")
     }
 
     fn extract_plan_from_response(&self, text: &str) -> Result<Plan, PlannerError> {
@@ -44,14 +41,14 @@ impl KimiProvider {
         let json_str = if let Some(start) = text.find("```json") {
             let after_start = &text[start + 7..];
             if let Some(end) = after_start.find("```") {
-                &after_start[..end].trim()
+                after_start[..end].trim()
             } else {
                 text.trim()
             }
         } else if let Some(start) = text.find("```") {
             let after_start = &text[start + 3..];
             if let Some(end) = after_start.find("```") {
-                &after_start[..end].trim()
+                after_start[..end].trim()
             } else {
                 text.trim()
             }
@@ -62,8 +59,7 @@ impl KimiProvider {
         let plan: Plan = serde_json::from_str(json_str)
             .map_err(|e| PlannerError::ParseError(format!("Invalid JSON: {}", e)))?;
 
-        crate::prompt::validate_plan_structure(&plan)
-            .map_err(PlannerError::ParseError)?;
+        crate::prompt::validate_plan_structure(&plan).map_err(PlannerError::ParseError)?;
 
         Ok(plan)
     }
@@ -124,9 +120,7 @@ impl LlmProvider for KimiProvider {
                         message: msg,
                     }
                 }
-                ureq::Error::Transport(e) => {
-                    PlannerError::ConnectionError(e.to_string())
-                }
+                ureq::Error::Transport(e) => PlannerError::ConnectionError(e.to_string()),
             })?;
 
         let kimi_response: KimiResponse = response

@@ -21,7 +21,9 @@ use tracing_subscriber::EnvFilter;
 use operator_core::config::{OperatorConfig, ProviderSettings};
 use operator_core::types::{Mode, Plan, RunStatus};
 use operator_core::validation::validate_plan;
-use operator_planner::{Planner, PlannerConfig as PlannerPlannerConfig, ProviderConfig, ProviderType};
+use operator_planner::{
+    Planner, PlannerConfig as PlannerPlannerConfig, ProviderConfig, ProviderType,
+};
 use operator_runtime::engine::{Engine, EngineConfig, RunSummary};
 use operator_store::Store;
 
@@ -695,7 +697,9 @@ fn cmd_do(
         }
     } else if let Ok(env_provider) = std::env::var("OPERATOR_DEFAULT_PROVIDER") {
         env_provider.parse::<ProviderType>().unwrap_or_else(|_| {
-            planner.first_available_provider().unwrap_or(ProviderType::Ollama)
+            planner
+                .first_available_provider()
+                .unwrap_or(ProviderType::Ollama)
         })
     } else if let Some(first_available) = planner.first_available_provider() {
         first_available
@@ -716,8 +720,8 @@ fn cmd_do(
             }
         } else {
             if cli.json {
-                let obj = serde_json::json!({ 
-                    "error": "No LLM provider available. Set an API key or start Ollama." 
+                let obj = serde_json::json!({
+                    "error": "No LLM provider available. Set an API key or start Ollama."
                 });
                 println!("{}", serde_json::to_string_pretty(&obj)?);
             } else {
@@ -774,7 +778,10 @@ fn cmd_do(
             println!("{}", serde_json::to_string_pretty(&plan)?);
         } else {
             println!("\nGenerated Plan: {}", plan.name);
-            println!("Description: {}", plan.description.as_deref().unwrap_or("N/A"));
+            println!(
+                "Description: {}",
+                plan.description.as_deref().unwrap_or("N/A")
+            );
             println!("Steps ({}):", plan.steps.len());
             for (i, step) in plan.steps.iter().enumerate() {
                 println!("  {}. {} - {:?}", i + 1, step.id, step.step_type);
@@ -790,9 +797,9 @@ fn cmd_do(
     if let Err(errors) = validate_plan(&plan) {
         if cli.json {
             let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
-            let obj = serde_json::json!({ 
+            let obj = serde_json::json!({
                 "error": "Generated plan failed validation",
-                "validation_errors": msgs 
+                "validation_errors": msgs
             });
             println!("{}", serde_json::to_string_pretty(&obj)?);
         } else {
@@ -801,7 +808,10 @@ fn cmd_do(
                 eprintln!("  - {}", err);
             }
             eprintln!();
-            eprintln!("You can view the raw plan with: operator-jack do \"{}\" --show-plan", instruction);
+            eprintln!(
+                "You can view the raw plan with: operator-jack do \"{}\" --show-plan",
+                instruction
+            );
         }
         std::process::exit(2);
     }
@@ -860,7 +870,10 @@ fn cmd_do(
 /// Builds planner configuration from operator-core config.
 fn build_planner_config(cfg: &OperatorConfig) -> PlannerPlannerConfig {
     PlannerPlannerConfig {
-        provider: cfg.default_provider.parse::<ProviderType>().unwrap_or(ProviderType::Ollama),
+        provider: cfg
+            .default_provider
+            .parse::<ProviderType>()
+            .unwrap_or(ProviderType::Ollama),
         kimi: convert_provider_settings(&cfg.planner.kimi, "KIMI_API_KEY"),
         openai: convert_provider_settings(&cfg.planner.openai, "OPENAI_API_KEY"),
         anthropic: convert_provider_settings(&cfg.planner.anthropic, "ANTHROPIC_API_KEY"),

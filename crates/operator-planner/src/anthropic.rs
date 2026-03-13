@@ -44,14 +44,14 @@ impl AnthropicProvider {
         let json_str = if let Some(start) = text.find("```json") {
             let after_start = &text[start + 7..];
             if let Some(end) = after_start.find("```") {
-                &after_start[..end].trim()
+                after_start[..end].trim()
             } else {
                 text.trim()
             }
         } else if let Some(start) = text.find("```") {
             let after_start = &text[start + 3..];
             if let Some(end) = after_start.find("```") {
-                &after_start[..end].trim()
+                after_start[..end].trim()
             } else {
                 text.trim()
             }
@@ -62,8 +62,7 @@ impl AnthropicProvider {
         let plan: Plan = serde_json::from_str(json_str)
             .map_err(|e| PlannerError::ParseError(format!("Invalid JSON: {}", e)))?;
 
-        crate::prompt::validate_plan_structure(&plan)
-            .map_err(PlannerError::ParseError)?;
+        crate::prompt::validate_plan_structure(&plan).map_err(PlannerError::ParseError)?;
 
         Ok(plan)
     }
@@ -120,9 +119,7 @@ impl LlmProvider for AnthropicProvider {
                         message: msg,
                     }
                 }
-                ureq::Error::Transport(e) => {
-                    PlannerError::ConnectionError(e.to_string())
-                }
+                ureq::Error::Transport(e) => PlannerError::ConnectionError(e.to_string()),
             })?;
 
         let anthropic_response: AnthropicResponse = response
