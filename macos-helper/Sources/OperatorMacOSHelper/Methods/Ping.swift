@@ -5,6 +5,6 @@ import Foundation
 func handlePing(_ params: [String: JSONValue]) throws -> [String: JSONValue] {
     return [
         "protocol_version": .string("1"),
-        "helper_version": .string("0.1.0"),
+        "helper_version": .string(helperVersion),
     ]
 }

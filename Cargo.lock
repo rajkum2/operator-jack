@@ -1125,7 +1125,7 @@ dependencies = [
 
 [[package]]
 name = "operator-cli"
-version = "0.6.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1147,7 +1147,7 @@ dependencies = [
 
 [[package]]
 name = "operator-core"
-version = "0.6.0"
+version = "0.7.1"
 dependencies = [
  "chrono",
  "dirs",
@@ -1161,7 +1161,7 @@ dependencies = [
 
 [[package]]
 name = "operator-exec-browser"
-version = "0.6.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1181,7 +1181,7 @@ dependencies = [
 
 [[package]]
 name = "operator-exec-system"
-version = "0.6.0"
+version = "0.7.1"
 dependencies = [
  "operator-core",
  "serde_json",
@@ -1192,7 +1192,7 @@ dependencies = [
 
 [[package]]
 name = "operator-ipc"
-version = "0.6.0"
+version = "0.7.1"
 dependencies = [
  "operator-core",
  "serde",
@@ -1204,7 +1204,7 @@ dependencies = [
 
 [[package]]
 name = "operator-planner"
-version = "0.6.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "operator-core",
@@ -1220,7 +1220,7 @@ dependencies = [
 
 [[package]]
 name = "operator-runtime"
-version = "0.6.0"
+version = "0.7.1"
 dependencies = [
  "chrono",
  "operator-core",
@@ -1236,7 +1236,7 @@ dependencies = [
 
 [[package]]
 name = "operator-skills"
-version = "0.6.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "dirs",
@@ -1252,7 +1252,7 @@ dependencies = [
 
 [[package]]
 name = "operator-store"
-version = "0.6.0"
+version = "0.7.1"
 dependencies = [
  "chrono",
  "operator-core",

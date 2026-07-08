@@ -3,7 +3,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-
 /// A CDP request message.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -103,7 +102,7 @@ pub struct NavigateResult {
     pub loader_id: Option<String>,
 
     /// Navigation error text (if failed).
-    pub error_text: Option<String>
+    pub error_text: Option<String>,
 }
 
 /// DOM node information.

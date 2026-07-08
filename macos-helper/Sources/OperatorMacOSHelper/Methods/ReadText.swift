@@ -18,16 +18,9 @@ import Foundation
 func handleReadText(_ params: [String: JSONValue]) throws -> [String: JSONValue] {
     try ensureAccessibility()
     let app = try extractApp(from: params)
-    let appElement = axAppElement(for: app)
 
-    guard let selector = SelectorParams.parse(from: params) else {
-        throw HelperError(code: "INVALID_PARAMS", message: "Missing or invalid 'selector' parameter")
-    }
-
-    let waitMs = extractImplicitWaitMs(from: params)
-    let windowElement = try resolveWindow(appElement: appElement, scope: selector.window)
-    let results = try implicitWaitForElement(root: windowElement, selector: selector, waitMs: waitMs)
-    let match = try disambiguate(results: results, index: selector.index)
+    // Resolve target via element_ref (preferred) or selector.
+    let match = try resolveActionTarget(params: params, app: app)
 
     // Read text with priority: value > title > description
     let attributePriority: [(attr: String, label: String)] = [

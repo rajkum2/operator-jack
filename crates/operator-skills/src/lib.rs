@@ -50,7 +50,7 @@ use std::collections::HashMap;
 pub fn load_skill(name: &str) -> Result<SkillManifest, SkillError> {
     let mut registry = SkillRegistry::new();
     registry.discover()?;
-    
+
     registry
         .get(name)
         .cloned()

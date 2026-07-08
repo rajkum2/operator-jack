@@ -100,6 +100,20 @@ Respond with valid JSON only."#,
     )
 }
 
+/// Extracts a JSON object from an LLM response that may wrap it in markdown
+/// fences (```json ... ```) or surrounding prose.
+///
+/// The generated plan is a single JSON object, so slicing from the first `{`
+/// to the last `}` robustly handles all of: fenced blocks, an *unclosed* fence
+/// (the previous fence-only parser fell back to text that still contained the
+/// "```json" prefix, guaranteeing a parse error), and prose around raw JSON.
+pub fn extract_json_from_response(text: &str) -> &str {
+    match (text.find('{'), text.rfind('}')) {
+        (Some(start), Some(end)) if end >= start => &text[start..=end],
+        _ => text.trim(),
+    }
+}
+
 /// Validates that a generated plan has the required fields.
 pub fn validate_plan_structure(plan: &operator_core::types::Plan) -> Result<(), String> {
     if plan.schema_version != 1 {
@@ -144,5 +158,26 @@ mod tests {
     fn user_prompt_contains_instruction() {
         let prompt = user_prompt("open Notes and type hello");
         assert!(prompt.contains("open Notes and type hello"));
+    }
+
+    #[test]
+    fn extract_json_handles_fences_prose_and_unclosed() {
+        let obj = r#"{"schema_version":1,"steps":[]}"#;
+        // Fenced.
+        assert_eq!(
+            extract_json_from_response(&format!("```json\n{obj}\n```")),
+            obj
+        );
+        // Plain fence.
+        assert_eq!(extract_json_from_response(&format!("```\n{obj}\n```")), obj);
+        // Prose around raw JSON.
+        assert_eq!(
+            extract_json_from_response(&format!("Here is your plan:\n{obj}\nDone.")),
+            obj
+        );
+        // Unclosed fence — the old parser returned text still containing "```json".
+        assert_eq!(extract_json_from_response(&format!("```json\n{obj}")), obj);
+        // Bare object.
+        assert_eq!(extract_json_from_response(obj), obj);
     }
 }

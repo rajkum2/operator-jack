@@ -228,7 +228,7 @@ default_provider = "ollama"
 # timeout_seconds = 60
 
 [planner.anthropic]
-# model = "claude-3-haiku-20240307"
+# model = "claude-haiku-4-5-20251001"
 # base_url = "https://api.anthropic.com/v1"
 # max_tokens = 4096
 # temperature = 0.2

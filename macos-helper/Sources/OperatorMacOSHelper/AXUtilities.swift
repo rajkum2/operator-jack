@@ -64,6 +64,17 @@ struct SelectorParams {
 
         return s
     }
+
+    /// True if the selector has at least one field the matcher actually checks.
+    /// `path` is intentionally excluded — it is parsed but not yet matched (M7),
+    /// so a `path`-only selector has no effective criteria. `index`, `window`,
+    /// and `maxDepth` are filters/scope, not content matchers. `anyOf` is
+    /// resolved separately by the caller.
+    var hasMatchableCriteria: Bool {
+        role != nil || subrole != nil || name != nil || nameContains != nil
+            || description != nil || descriptionContains != nil || value != nil
+            || valueContains != nil || identifier != nil
+    }
 }
 
 /// Window scoping parameters.
@@ -304,14 +315,14 @@ private func traverseTree(
     let role = axGetStringAttribute(element, kAXRoleAttribute as String) ?? "Unknown"
     let currentPath = pathPrefix.isEmpty ? role : "\(pathPrefix)/\(role)"
 
-    // Check if this element matches the selector
-    if currentDepth > 0 { // Skip the root (window) itself
-        if matchesSelector(element: element, selector: selector, role: role) {
-            let metadata = serializeElement(element)
-            var metaWithPath = metadata
-            metaWithPath["path"] = .string(currentPath)
-            results.append(FoundElement(element: element, metadata: metaWithPath, path: currentPath))
-        }
+    // Check if this element matches the selector — including the root itself, so
+    // a selector like {role: "AXWindow"} against a window root can match. (Before,
+    // the root was skipped, making window-targeting selectors silently unmatchable.)
+    if matchesSelector(element: element, selector: selector, role: role) {
+        let metadata = serializeElement(element)
+        var metaWithPath = metadata
+        metaWithPath["path"] = .string(currentPath)
+        results.append(FoundElement(element: element, metadata: metaWithPath, path: currentPath))
     }
 
     guard results.count < maxResults else { return }
@@ -345,6 +356,11 @@ private func traverseTree(
 
 /// Checks if a single AX element matches all specified selector criteria.
 private func matchesSelector(element: AXUIElement, selector: SelectorParams, role: String) -> Bool {
+    // A selector with no matchable criteria must match NOTHING, not everything.
+    // (Rust validation rejects such selectors before they reach here; this is
+    // defense-in-depth for direct-driven callers and tests.)
+    guard selector.hasMatchableCriteria else { return false }
+
     // Role: exact match
     if let sRole = selector.role {
         guard role == sRole else { return false }
@@ -641,4 +657,32 @@ func resolveElementRef(
         code: "ELEMENT_NOT_FOUND",
         message: "Element ref '\(refId)' is stale and no selector provided for fallback"
     )
+}
+
+/// Resolves the target element for an action handler (click/readText/setValue).
+/// Prefers `element_ref` (cached AXUIElement, with selector fallback when stale),
+/// otherwise resolves via `selector` with an implicit wait + disambiguation.
+/// Throws INVALID_PARAMS if neither an element_ref nor a selector is provided.
+func resolveActionTarget(
+    params: [String: JSONValue],
+    app: NSRunningApplication
+) throws -> FoundElement {
+    let appElement = axAppElement(for: app)
+
+    // element_ref path (returns nil only when no element_ref key is present).
+    if let viaRef = try resolveElementRef(params: params, appElement: appElement, windowScope: nil) {
+        return viaRef
+    }
+
+    // Selector path.
+    guard let selector = SelectorParams.parse(from: params) else {
+        throw HelperError(
+            code: "INVALID_PARAMS",
+            message: "Missing required 'selector' or 'element_ref' parameter"
+        )
+    }
+    let waitMs = extractImplicitWaitMs(from: params)
+    let windowElement = try resolveWindow(appElement: appElement, scope: selector.window)
+    let results = try implicitWaitForElement(root: windowElement, selector: selector, waitMs: waitMs)
+    return try disambiguate(results: results, index: selector.index)
 }

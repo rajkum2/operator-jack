@@ -1,7 +1,9 @@
 //! # Operator Planner
 //!
-//! Rule-based planner for Operator Jack that converts natural language
-//! instructions into structured automation plans using LLM providers.
+//! LLM-backed planner for Operator Jack that converts natural language
+//! instructions into structured automation plans. Supports multiple providers
+//! (Kimi, OpenAI, Anthropic, and local Ollama); there is no offline rule-based
+//! fallback — a reachable provider is required.
 //!
 //! ## Supported Providers
 //!

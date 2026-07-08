@@ -6,14 +6,93 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+See [`MASTER_PLAN.md`](MASTER_PLAN.md) for the authoritative M7-M15 roadmap (perception, safety envelope, MCP server, native agent loop, and beyond).
+
+## [0.7.1] - 2026-07-08
+
+Phase B — stabilization and reconciliation. No new features; audit fixes, Swift helper correctness, shipped-code security fixes, and documentation.
+
+### Fixed
+- Swift helper: `findElements` now matches the root element (a `{role: AXWindow}` selector was previously unmatchable)
+- Swift helper: `waitFor` resolves the window inside the poll loop instead of failing instantly with `WINDOW_NOT_FOUND`
+- Swift helper: wired `resolveElementRef` into Click/ReadText/SetValue (element_ref-only params were accepted by Rust but rejected by Swift)
+- Swift helper: guarded the `SelectMenu` AXUIElement cast (was a force cast); synced the hardcoded helper version to 0.7.1
+- Fixed shipped examples/skills: `docs/examples/calculator-buttons.json`, `skills/create-note.yaml`, `skills/take-screenshot.yaml`
+- `skill run` now validates the generated plan before executing; skill numeric params preserve integer type
+- Planner: fixed the fence-extraction bug (an unclosed JSON code fence guaranteed a ParseError); Anthropic default model bumped to `claude-haiku-4-5-20251001`
+- Non-char-boundary byte-slicing panics in CLI output
+- `resolve_helper_path` now consults the config `helper_path` setting
+
+### Security
+- **Mode ceiling:** `plan.mode` can no longer escalate above the configured mode — effective mode is now `min(plan.mode, config.mode)`, so a generated plan cannot self-escalate to unsafe
+- **Browser JS-injection:** fixed JS string escaping in the browser executor (quotes, backslashes, newlines; second interpolations were previously unescaped)
+- ui-lane IPC now enforces a read timeout and kills+respawns the helper on timeout
+- `sys.exec` now kills its child process on timeout
+
+### Added
+- Swift test target `macos-helper/Tests/OperatorMacOSHelperTests/` (9 tests) — previously there were no Swift tests
+- `make check-examples` harness (validate all example plans + dry-run all skills), wired into CI
+- `cargo fmt` applied; committed `Cargo.lock`; `--locked` builds in CI/release
+- `MASTER_PLAN.md` — authoritative forward roadmap (M7-M15)
+- `doctor` provider-readiness check (API key present per provider / Ollama model pulled)
+
+### Changed
+- Homebrew formula bumped to v0.7.1 (release workflow gains a tap-update step)
+- README: added an Installation section; removed false `plan list` and `--set` claims; documented the real global flags
+- Documentation reconciled with code (CLAUDE.md, PROJECT_CONTEXT.md); `docs/ROADMAP.md` marked superseded by MASTER_PLAN.md
+
+## [0.7.0] - 2026-03
+
+M5 — Browser executor via the Chrome DevTools Protocol (CDP).
+
+### Added
+- `operator-exec-browser` crate — a hand-rolled CDP client over `tokio-tungstenite` (WebSocket) + `reqwest` (Chrome discovery)
+- `tokio` async runtime (`operator-cli` + `operator-exec-browser`) — the first async in the codebase
+- `browser` CLI subcommands: `doctor`, `launch`, `navigate`, `screenshot`
+- Chrome process management (launch with `--remote-debugging-port`, connect, cleanup); `allow_domains` enforcement for browser navigation
+- SPEC_FREEZE_V0.6.md (M5 browser spec)
+
+### Notes
+- The browser lane is reachable ONLY via the `browser` CLI subcommands. Browser steps in plans are not yet wired into the engine (a plan with `browser.*` steps fails validation) — plan-lane wiring is milestone M12.
+
+## [0.6.0] - 2026-03
+
+M6 — Skills system (reusable parameterized macros).
+
+### Added
+- `operator-skills` crate — YAML/JSON manifest parsing, parameter validation and interpolation, expansion into a full plan at execution time
+- `skill` CLI subcommands: `list`, `validate`, `run` (`--param key=value`)
+- Skill registry that discovers skills from multiple paths (project `skills/`, user directory)
+- 3 example skills in `skills/`: open-and-type, create-note, take-screenshot
+
+## [0.5.0] - 2026-03-14
+
+M4 — Natural-language planner (LLM-backed).
+
+### Added
+- `operator-planner` crate with a provider abstraction and four LLM providers: Kimi (Moonshot), OpenAI, Anthropic, and local Ollama
+- `operator-jack do "<instruction>"` command for natural-language execution
+- `--provider`, `--show-plan`, `--save-plan` flags on `do`; interactive provider selection
+- Planner configuration in `config.toml` (per-provider settings)
+- SPEC_FREEZE_V0.4.md (M4 planner spec)
+
+### Notes
+- The planner is LLM-backed (it requires a reachable provider); there is no offline rule-based fallback.
+
+## [0.4.0] - 2026-03-04
+
+Phase A — production packaging and distribution.
+
 ### Changed
 - Renamed binary from `operator` to `operator-jack` to avoid naming conflicts
-- Added LICENSE file (MIT)
-- Added CHANGELOG.md and CONTRIBUTING.md
-- Added Makefile with build/test/install/universal targets
-- Added GitHub Actions CI (test + release workflows)
-- Added Homebrew tap formula and install script
-- Added config file system (`~/.config/operator-jack/config.toml`)
+
+### Added
+- LICENSE file (MIT)
+- CHANGELOG.md and CONTRIBUTING.md
+- Makefile with build/test/install/universal targets
+- GitHub Actions CI (test + release workflows)
+- Homebrew tap formula and install script
+- Config file system (`~/.config/operator-jack/config.toml`)
 - Enhanced `operator-jack doctor` with first-run experience
 
 ## [0.3.1] - 2026-03-03

@@ -11,7 +11,7 @@ use serde_json::json;
 use operator_core::event::{Event, EventType};
 use operator_core::interpolation::interpolate_params;
 use operator_core::types::*;
-use operator_exec_system::executor::execute_system_step;
+use operator_exec_system::executor::execute_system_step_with_timeout;
 use operator_ipc::client::HelperClient;
 use operator_store::Store;
 
@@ -123,10 +123,15 @@ impl Engine {
         let (_id, plan) = self.store.get_plan(plan_id)?;
 
         // -- 2. Determine effective mode ----------------------------------------
-        let effective_mode = plan
-            .mode
-            .clone()
-            .unwrap_or_else(|| self.config.mode.clone());
+        // The configured (CLI/config) mode is a CEILING: a plan may make itself
+        // MORE restrictive (safe) but must never ESCALATE to unsafe over a safe
+        // config. This stops an untrusted or LLM-generated plan from disabling
+        // the user's confirmations by declaring `mode: unsafe`.
+        let effective_mode = match (&self.config.mode, &plan.mode) {
+            (Mode::Safe, _) => Mode::Safe,
+            (_, Some(Mode::Safe)) => Mode::Safe,
+            (config_mode, _) => config_mode.clone(),
+        };
 
         // -- 3. Create run (queued) ---------------------------------------------
         let run_id = self.store.create_run(plan_id, &effective_mode)?;
@@ -790,14 +795,22 @@ fn execute_with_timeout(
 
     match lane {
         "system" => {
-            // Run system step on a worker thread with timeout.
+            // Run the system step on a worker thread. sys.exec enforces the
+            // deadline itself and KILLS its child on timeout (so it isn't left
+            // orphaned); the channel recv is a backstop with extra grace so the
+            // in-handler timeout fires first and returns a clean result.
             let (tx, rx) = mpsc::channel();
             thread::spawn(move || {
-                let result = execute_system_step(&step_type_clone, &params_clone);
+                let result = execute_system_step_with_timeout(
+                    &step_type_clone,
+                    &params_clone,
+                    Some(timeout_ms),
+                );
                 let _ = tx.send(result.map_err(RuntimeError::from));
             });
 
-            match rx.recv_timeout(Duration::from_millis(timeout_ms)) {
+            let backstop = Duration::from_millis(timeout_ms.saturating_add(5_000));
+            match rx.recv_timeout(backstop) {
                 Ok(result) => result,
                 Err(mpsc::RecvTimeoutError::Timeout) => Err(RuntimeError::Other(format!(
                     "Step timed out after {}ms",
@@ -818,10 +831,12 @@ fn execute_with_timeout(
                 h.connect()?;
             }
 
-            // For UI steps, the timeout is enforced by the IPC protocol
-            // (the helper should respect timeout_ms). For now, use the same
-            // channel-based approach.
-            let result = h.send(step_type.as_str(), params.clone())?;
+            // Bound the IPC read so a hung helper cannot block the run forever.
+            // The helper runs its own implicit waits (e.g. wait_for polling up to
+            // its timeout_ms), so pad the read deadline generously — it should
+            // only trip when the helper is genuinely stuck, not merely waiting.
+            let read_timeout = Duration::from_millis(timeout_ms.saturating_add(10_000));
+            let result = h.send_with_timeout(step_type.as_str(), params.clone(), read_timeout)?;
             Ok(result)
         }
         other => Err(RuntimeError::Other(format!(

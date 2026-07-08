@@ -41,6 +41,10 @@ func handleSelectMenu(_ params: [String: JSONValue]) throws -> [String: JSONValu
     guard let menuBar = axGetAttribute(appElement, kAXMenuBarAttribute as String) else {
         throw HelperError(code: "ELEMENT_NOT_FOUND", message: "Could not access menu bar for app '\(app.localizedName ?? "unknown")'")
     }
+    // Verify the CF type before casting — a non-AXUIElement would crash on force-cast.
+    guard CFGetTypeID(menuBar) == AXUIElementGetTypeID() else {
+        throw HelperError(code: "ELEMENT_NOT_FOUND", message: "Menu bar attribute is not an AXUIElement for app '\(app.localizedName ?? "unknown")'")
+    }
     let menuBarElement = menuBar as! AXUIElement
 
     // Walk the menu path

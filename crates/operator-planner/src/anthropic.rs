@@ -36,28 +36,11 @@ impl AnthropicProvider {
         self.config
             .model
             .as_deref()
-            .unwrap_or("claude-3-haiku-20240307")
+            .unwrap_or("claude-haiku-4-5-20251001")
     }
 
     fn extract_plan_from_response(&self, text: &str) -> Result<Plan, PlannerError> {
-        // Try to extract JSON from markdown code blocks
-        let json_str = if let Some(start) = text.find("```json") {
-            let after_start = &text[start + 7..];
-            if let Some(end) = after_start.find("```") {
-                after_start[..end].trim()
-            } else {
-                text.trim()
-            }
-        } else if let Some(start) = text.find("```") {
-            let after_start = &text[start + 3..];
-            if let Some(end) = after_start.find("```") {
-                after_start[..end].trim()
-            } else {
-                text.trim()
-            }
-        } else {
-            text.trim()
-        };
+        let json_str = crate::prompt::extract_json_from_response(text);
 
         let plan: Plan = serde_json::from_str(json_str)
             .map_err(|e| PlannerError::ParseError(format!("Invalid JSON: {}", e)))?;
@@ -74,7 +57,7 @@ impl LlmProvider for AnthropicProvider {
     }
 
     fn default_model(&self) -> &'static str {
-        "claude-3-haiku-20240307"
+        "claude-haiku-4-5-20251001"
     }
 
     fn generate_plan(&self, instruction: &str) -> Result<Plan, PlannerError> {
@@ -176,7 +159,7 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        assert_eq!(provider.default_model(), "claude-3-haiku-20240307");
+        assert_eq!(provider.default_model(), "claude-haiku-4-5-20251001");
     }
 
     #[test]

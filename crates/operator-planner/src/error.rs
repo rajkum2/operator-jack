@@ -8,7 +8,9 @@ pub enum PlannerError {
     #[error("LLM provider error: {0}")]
     ProviderError(String),
 
-    #[error("API key not found for provider '{provider}'. Set {env_var} environment variable or configure in config file.")]
+    #[error(
+        "API key not found for provider '{provider}'. Set the {env_var} environment variable."
+    )]
     ApiKeyNotFound { provider: String, env_var: String },
 
     #[error("Failed to connect to LLM provider: {0}")]

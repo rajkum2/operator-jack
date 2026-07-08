@@ -6,7 +6,7 @@ RUST_BIN := operator-jack
 SWIFT_BIN := operator-macos-helper
 INSTALL_DIR := /usr/local/bin
 
-.PHONY: all build build-release test lint clean install uninstall universal help
+.PHONY: all build build-release test lint check-examples clean install uninstall universal help
 
 ## Default: build debug binaries
 all: build
@@ -29,6 +29,10 @@ test:
 lint:
 	cargo fmt --check
 	cargo clippy -- -D warnings
+
+## Validate all shipped example plans and skills (regression guard)
+check-examples: build
+	./scripts/check-examples.sh
 
 ## Clean build artifacts
 clean:
@@ -54,8 +58,8 @@ universal:
 	@echo "Building universal binaries for v$(VERSION)..."
 	# Rust: build for both architectures
 	rustup target add aarch64-apple-darwin x86_64-apple-darwin 2>/dev/null || true
-	cargo build --release --target aarch64-apple-darwin
-	cargo build --release --target x86_64-apple-darwin
+	cargo build --locked --release --target aarch64-apple-darwin
+	cargo build --locked --release --target x86_64-apple-darwin
 	# Rust: create universal binary via lipo
 	mkdir -p dist
 	lipo -create \

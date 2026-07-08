@@ -88,9 +88,11 @@ impl Selector {
             return Ok(());
         }
 
-        // At least one identifying field must be present
-        let has_identifier = self.path.is_some()
-            || self.identifier.is_some()
+        // At least one identifying field the matcher actually checks must be
+        // present. `path` is intentionally excluded: it is parsed but not yet
+        // matched by the helper (M7), so a `path`-only selector would silently
+        // match every element — reject it loudly instead.
+        let has_identifier = self.identifier.is_some()
             || self.name.is_some()
             || self.name_contains.is_some()
             || self.role.is_some()
@@ -100,11 +102,17 @@ impl Selector {
             || self.description_contains.is_some();
 
         if !has_identifier {
-            return Err(CoreError::Validation(
-                "Selector must have at least one identifying field (path, identifier, name, \
-                 name_contains, role, value, value_contains, description, or description_contains)"
-                    .to_string(),
-            ));
+            let hint = if self.path.is_some() {
+                " ('path' is parsed but not yet matched by the helper; pair it with \
+                 role/identifier/name/etc.)"
+            } else {
+                ""
+            };
+            return Err(CoreError::Validation(format!(
+                "Selector must have at least one identifying field (identifier, name, \
+                 name_contains, role, value, value_contains, description, or \
+                 description_contains){hint}"
+            )));
         }
 
         // Mutually exclusive pairs
@@ -312,5 +320,45 @@ mod tests {
 
         let deserialized: Selector = serde_json::from_value(json).unwrap();
         assert_eq!(deserialized.any_of.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_empty_selector_is_invalid() {
+        let sel = Selector::default();
+        assert!(sel.validate().is_err());
+    }
+
+    #[test]
+    fn test_path_only_selector_is_invalid() {
+        // `path` is parsed but not yet matched by the helper, so a path-only
+        // selector would silently match everything. It must be rejected, and the
+        // error should hint at the path cause.
+        let sel = Selector {
+            path: Some("AXWindow/AXButton[0]".into()),
+            ..Default::default()
+        };
+        let err = sel.validate().unwrap_err();
+        assert!(err.to_string().contains("path"));
+    }
+
+    #[test]
+    fn test_path_with_role_is_valid() {
+        // path combined with a real matchable field is allowed (path is ignored
+        // for now, role does the matching).
+        let sel = Selector {
+            path: Some("AXWindow/AXButton[0]".into()),
+            role: Some("AXButton".into()),
+            ..Default::default()
+        };
+        assert!(sel.validate().is_ok());
+    }
+
+    #[test]
+    fn test_index_only_selector_is_invalid() {
+        let sel = Selector {
+            index: Some(0),
+            ..Default::default()
+        };
+        assert!(sel.validate().is_err());
     }
 }

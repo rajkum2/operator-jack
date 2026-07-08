@@ -102,11 +102,16 @@ impl ProviderType {
     }
 
     /// Returns the default model for this provider.
+    ///
+    /// Interim defaults — the multi-turn provider layer (M10) will revisit these.
+    /// The Anthropic default was bumped off the deprecated `claude-3-haiku-20240307`
+    /// to a current-generation model; the others remain valid, if dated, and are
+    /// left as-is to avoid pinning IDs that can't be verified here.
     pub fn default_model(&self) -> &'static str {
         match self {
             ProviderType::Kimi => "moonshot-v1-8k",
             ProviderType::Openai => "gpt-4o-mini",
-            ProviderType::Anthropic => "claude-3-haiku-20240307",
+            ProviderType::Anthropic => "claude-haiku-4-5-20251001",
             ProviderType::Ollama => "llama3.2",
         }
     }

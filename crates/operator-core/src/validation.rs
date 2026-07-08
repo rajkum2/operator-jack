@@ -195,30 +195,20 @@ pub fn validate_step_params(
             require_object_param(params, "window")
         }
         // Browser lane
-        StepType::BrowserNavigate => {
-            require_string_param(params, "url")
-        }
-        StepType::BrowserClick => {
-            require_string_param(params, "selector")
-        }
+        StepType::BrowserNavigate => require_string_param(params, "url"),
+        StepType::BrowserClick => require_string_param(params, "selector"),
         StepType::BrowserType => {
             require_string_param(params, "selector")?;
             require_string_param(params, "text")
         }
-        StepType::BrowserGetText => {
-            require_string_param(params, "selector")
-        }
+        StepType::BrowserGetText => require_string_param(params, "selector"),
         StepType::BrowserGetAttribute => {
             require_string_param(params, "selector")?;
             require_string_param(params, "attribute")
         }
-        StepType::BrowserExecuteJs => {
-            require_string_param(params, "script")
-        }
+        StepType::BrowserExecuteJs => require_string_param(params, "script"),
         StepType::BrowserScreenshot => Ok(()),
-        StepType::BrowserWaitFor => {
-            require_string_param(params, "selector")
-        }
+        StepType::BrowserWaitFor => require_string_param(params, "selector"),
         StepType::BrowserScroll => Ok(()),
     }
 }

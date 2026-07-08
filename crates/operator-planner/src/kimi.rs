@@ -37,24 +37,7 @@ impl KimiProvider {
     }
 
     fn extract_plan_from_response(&self, text: &str) -> Result<Plan, PlannerError> {
-        // Try to extract JSON from markdown code blocks
-        let json_str = if let Some(start) = text.find("```json") {
-            let after_start = &text[start + 7..];
-            if let Some(end) = after_start.find("```") {
-                after_start[..end].trim()
-            } else {
-                text.trim()
-            }
-        } else if let Some(start) = text.find("```") {
-            let after_start = &text[start + 3..];
-            if let Some(end) = after_start.find("```") {
-                after_start[..end].trim()
-            } else {
-                text.trim()
-            }
-        } else {
-            text.trim()
-        };
+        let json_str = crate::prompt::extract_json_from_response(text);
 
         let plan: Plan = serde_json::from_str(json_str)
             .map_err(|e| PlannerError::ParseError(format!("Invalid JSON: {}", e)))?;

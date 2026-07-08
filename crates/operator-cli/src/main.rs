@@ -327,9 +327,11 @@ fn main() -> Result<()> {
             BrowserAction::Doctor => cmd_browser_doctor(&cli),
             BrowserAction::Launch { port } => cmd_browser_launch(&cli, *port),
             BrowserAction::Navigate { url, port } => cmd_browser_navigate(&cli, url, *port),
-            BrowserAction::Screenshot { output, full_page, port } => {
-                cmd_browser_screenshot(&cli, output, *full_page, *port)
-            }
+            BrowserAction::Screenshot {
+                output,
+                full_page,
+                port,
+            } => cmd_browser_screenshot(&cli, output, *full_page, *port),
         },
     }
 }
@@ -398,6 +400,11 @@ fn cmd_doctor(cli: &Cli) -> Result<()> {
         "SKIPPED (helper not found)"
     };
 
+    // 5. Planner providers (readiness of the `do` natural-language command).
+    let planner = operator_planner::Planner::new(operator_planner::PlannerConfig::default());
+    let providers = planner.available_providers();
+    let do_ready = providers.iter().any(|(_, ready)| *ready);
+
     // Detect first run (no config file exists).
     let config_path = OperatorConfig::default_path();
     let is_first_run = config_path.as_ref().is_none_or(|p| !p.exists());
@@ -427,6 +434,13 @@ fn cmd_doctor(cli: &Cli) -> Result<()> {
             "db_path": db_path.display().to_string(),
             "log_dir_path": log_dir.display().to_string(),
             "first_run": is_first_run,
+            "planner": {
+                "do_ready": do_ready,
+                "providers": providers
+                    .iter()
+                    .map(|(pt, ready)| (pt.display_name().to_string(), serde_json::json!(ready)))
+                    .collect::<serde_json::Map<_, _>>(),
+            },
         });
         println!("{}", serde_json::to_string_pretty(&obj)?);
     } else {
@@ -444,6 +458,28 @@ fn cmd_doctor(cli: &Cli) -> Result<()> {
         println!("Log dir:       {}", log_status);
         println!("Helper:        {}", helper_status);
         println!("Accessibility: {}", accessibility_status);
+        println!(
+            "Planner (do):  {}",
+            if do_ready { "READY" } else { "NOT CONFIGURED" }
+        );
+        for (pt, ready) in &providers {
+            let mark = if *ready { "✓" } else { "✗" };
+            let hint = if *ready {
+                String::new()
+            } else if pt.requires_api_key() {
+                format!(" — set {}", pt.api_key_env_var())
+            } else {
+                " — start Ollama and pull a model".to_string()
+            };
+            println!("               {} {}{}", mark, pt.display_name(), hint);
+        }
+
+        if !do_ready {
+            println!();
+            println!("  `operator-jack do` needs an LLM provider. Either:");
+            println!("    - export ANTHROPIC_API_KEY / OPENAI_API_KEY / KIMI_API_KEY, or");
+            println!("    - run Ollama locally and `ollama pull llama3.2`");
+        }
 
         if accessibility_status == "NOT GRANTED" {
             println!();
@@ -1264,7 +1300,7 @@ fn print_ax_tree(node: &serde_json::Value, indent: usize) {
     }
     if let Some(v) = value {
         if !v.is_empty() {
-            let display_val = if v.len() > 40 { &v[..40] } else { v };
+            let display_val = truncate_str(v, 40);
             line.push_str(&format!(" value=\"{}\"", display_val));
         }
     }
@@ -1557,6 +1593,16 @@ fn print_run_summary(cli: &Cli, summary: &RunSummary) {
 /// 4. A fallback path next to the current executable
 ///
 /// Returns `Some(path)` if the binary is found, `None` otherwise.
+/// Truncates a string to at most `max` characters, cutting at a UTF-8 char
+/// boundary. Byte-slicing at a fixed index (`&s[..n]`) panics when `n` lands
+/// inside a multi-byte character.
+fn truncate_str(s: &str, max: usize) -> &str {
+    match s.char_indices().nth(max) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
+    }
+}
+
 fn resolve_helper_path(cli: &Cli) -> Option<PathBuf> {
     // 1. CLI flag.
     if let Some(ref p) = cli.helper_path {
@@ -1574,7 +1620,17 @@ fn resolve_helper_path(cli: &Cli) -> Option<PathBuf> {
         }
     }
 
-    // 3. System PATH via `which`.
+    // 3. Config file (`helper_path` in ~/.config/operator-jack/config.toml).
+    if let Ok(cfg) = OperatorConfig::load() {
+        if let Some(ref p) = cfg.helper_path {
+            let path = PathBuf::from(p);
+            if path.exists() {
+                return Some(path);
+            }
+        }
+    }
+
+    // 4. System PATH via `which`.
     if let Ok(output) = Command::new("which").arg("operator-macos-helper").output() {
         if output.status.success() {
             let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -1587,7 +1643,7 @@ fn resolve_helper_path(cli: &Cli) -> Option<PathBuf> {
         }
     }
 
-    // 4. Fallback: next to current executable.
+    // 5. Fallback: next to current executable.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let fallback = dir.join("operator-macos-helper");
@@ -1597,7 +1653,7 @@ fn resolve_helper_path(cli: &Cli) -> Option<PathBuf> {
         }
     }
 
-    // 5. Dev fallback: Swift build output relative to the executable.
+    // 6. Dev fallback: Swift build output relative to the executable.
     //    When running from `target/debug/operator-jack`, the helper lives at
     //    `../../macos-helper/.build/{release,debug}/operator-macos-helper`.
     if let Ok(exe) = std::env::current_exe() {
@@ -1756,7 +1812,9 @@ fn cmd_skill_list(cli: &Cli) -> Result<()> {
     use operator_skills::SkillRegistry;
 
     let mut registry = SkillRegistry::new();
-    registry.discover().map_err(|e| anyhow::anyhow!("Failed to discover skills: {}", e))?;
+    registry
+        .discover()
+        .map_err(|e| anyhow::anyhow!("Failed to discover skills: {}", e))?;
 
     let skills = registry.list();
 
@@ -1791,7 +1849,7 @@ fn cmd_skill_list(cli: &Cli) -> Result<()> {
         println!("{}", "-".repeat(80));
         for skill in skills {
             let desc = skill.description.as_deref().unwrap_or("-");
-            let desc_short = if desc.len() > 28 { &desc[..28] } else { desc };
+            let desc_short = truncate_str(desc, 28);
             let params: Vec<_> = skill.parameters.iter().map(|p| p.name.clone()).collect();
             let params_str = if params.is_empty() {
                 "none".to_string()
@@ -1832,7 +1890,11 @@ fn cmd_skill_validate(cli: &Cli, skill_file: &Path) -> Result<()> {
                 }
                 println!("  Parameters: {}", manifest.parameters.len());
                 for param in &manifest.parameters {
-                    let req = if param.required { "required" } else { "optional" };
+                    let req = if param.required {
+                        "required"
+                    } else {
+                        "optional"
+                    };
                     println!("    - {} ({:?}, {})", param.name, param.param_type, req);
                 }
                 println!("  Steps: {}", manifest.steps.len());
@@ -1855,19 +1917,17 @@ fn cmd_skill_validate(cli: &Cli, skill_file: &Path) -> Result<()> {
 }
 
 /// Run a skill with parameters.
-fn cmd_skill_run(
-    cli: &Cli,
-    skill_name: &str,
-    params: &[(String, String)],
-) -> Result<()> {
-    use operator_skills::{SkillRegistry, registry::ensure_user_skills_dir};
+fn cmd_skill_run(cli: &Cli, skill_name: &str, params: &[(String, String)]) -> Result<()> {
+    use operator_skills::{registry::ensure_user_skills_dir, SkillRegistry};
     use std::collections::HashMap;
 
     // Ensure user skills dir exists (creates it if not present)
     let _ = ensure_user_skills_dir();
 
     let mut registry = SkillRegistry::new();
-    registry.discover().map_err(|e| anyhow::anyhow!("Failed to discover skills: {}", e))?;
+    registry
+        .discover()
+        .map_err(|e| anyhow::anyhow!("Failed to discover skills: {}", e))?;
 
     let manifest = registry.get(skill_name).ok_or_else(|| {
         anyhow::anyhow!(
@@ -1880,14 +1940,33 @@ fn cmd_skill_run(
     let params_map: HashMap<String, String> = params.iter().cloned().collect();
 
     // Resolve parameters
-    let resolved = manifest.resolve(params_map).map_err(|e| {
-        anyhow::anyhow!("Failed to resolve skill parameters: {}", e)
-    })?;
+    let resolved = manifest
+        .resolve(params_map)
+        .map_err(|e| anyhow::anyhow!("Failed to resolve skill parameters: {}", e))?;
 
     // Expand to plan
-    let plan = resolved.to_plan().map_err(|e| {
-        anyhow::anyhow!("Failed to expand skill to plan: {}", e)
-    })?;
+    let plan = resolved
+        .to_plan()
+        .map_err(|e| anyhow::anyhow!("Failed to expand skill to plan: {}", e))?;
+
+    // Validate the expanded plan BEFORE executing, so a skill with bad step
+    // params fails loudly here rather than mid-run inside the Swift helper.
+    if let Err(errors) = validate_plan(&plan) {
+        if cli.json {
+            let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+            let obj = serde_json::json!({ "valid": false, "errors": msgs });
+            println!("{}", serde_json::to_string_pretty(&obj)?);
+        } else {
+            eprintln!(
+                "Skill '{skill_name}' expanded to an invalid plan ({} error(s)):",
+                errors.len()
+            );
+            for err in &errors {
+                eprintln!("  - {err}");
+            }
+        }
+        std::process::exit(2);
+    }
 
     // Execute the plan (same logic as cmd_run)
     let store = open_store()?;
@@ -1939,7 +2018,6 @@ fn cmd_skill_run(
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Browser command handlers (M5)
 // ---------------------------------------------------------------------------
@@ -1965,16 +2043,16 @@ fn cmd_browser_doctor(cli: &Cli) -> Result<()> {
 /// Launch Chrome with remote debugging.
 async fn cmd_browser_launch_async(_cli: &Cli, port: u16) -> Result<()> {
     let mut child = operator_exec_browser::launch_chrome(port).await?;
-    
+
     println!("Chrome launched with remote debugging on port {}", port);
     println!("Press Ctrl+C to stop");
 
     // Wait for the process
     tokio::signal::ctrl_c().await?;
-    
+
     child.kill().await?;
     println!("Chrome stopped");
-    
+
     Ok(())
 }
 
@@ -1985,14 +2063,14 @@ fn cmd_browser_launch(cli: &Cli, port: u16) -> Result<()> {
 
 /// Navigate to a URL.
 async fn cmd_browser_navigate_async(_cli: &Cli, url: &str, port: u16) -> Result<()> {
-    use operator_exec_browser::{BrowserClient, discover_chrome_ws_url};
-    
+    use operator_exec_browser::{discover_chrome_ws_url, BrowserClient};
+
     let ws_url = discover_chrome_ws_url(port).await?;
     let client = BrowserClient::connect(ws_url).await?;
-    
+
     let frame_id = client.navigate(url).await?;
     println!("Navigated to {} (frame: {})", url, frame_id);
-    
+
     client.close().await;
     Ok(())
 }
@@ -2009,16 +2087,16 @@ async fn cmd_browser_screenshot_async(
     full_page: bool,
     port: u16,
 ) -> Result<()> {
-    use operator_exec_browser::{BrowserClient, discover_chrome_ws_url};
-    
+    use operator_exec_browser::{discover_chrome_ws_url, BrowserClient};
+
     let ws_url = discover_chrome_ws_url(port).await?;
     let client = BrowserClient::connect(ws_url).await?;
-    
+
     let image_data = client.screenshot(full_page).await?;
     std::fs::write(output, image_data)?;
-    
+
     println!("Screenshot saved to {}", output.display());
-    
+
     client.close().await;
     Ok(())
 }

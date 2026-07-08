@@ -1,8 +1,8 @@
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
-use std::process::Command;
-use std::time::Instant;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use operator_core::types::StepType;
 use serde_json::{json, Value};
@@ -19,6 +19,8 @@ pub enum SystemExecError {
     MissingParam(String),
     #[error("Execution failed: {0}")]
     ExecFailed(String),
+    #[error("Timed out: {0}")]
+    Timeout(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -32,6 +34,18 @@ const CAPTURE_CAP: usize = 1_048_576;
 
 /// Execute a system-lane step. Returns the output JSON on success.
 pub fn execute_system_step(step_type: &StepType, params: &Value) -> Result<Value, SystemExecError> {
+    execute_system_step_with_timeout(step_type, params, None)
+}
+
+/// Execute a system-lane step, enforcing `exec_timeout_ms` on `sys.exec` (the
+/// only step that can run an arbitrary long-lived child). On timeout the child
+/// process is killed, rather than being left to run orphaned after the engine's
+/// worker thread gives up. `None` means no in-handler deadline.
+pub fn execute_system_step_with_timeout(
+    step_type: &StepType,
+    params: &Value,
+    exec_timeout_ms: Option<u64>,
+) -> Result<Value, SystemExecError> {
     let start = Instant::now();
 
     let result = match step_type {
@@ -45,7 +59,7 @@ pub fn execute_system_step(step_type: &StepType, params: &Value) -> Result<Value
         StepType::SysMovePath => exec_move_path(params),
         StepType::SysCopyPath => exec_copy_path(params),
         StepType::SysDeletePath => exec_delete_path(params),
-        StepType::SysExec => exec_command(params),
+        StepType::SysExec => exec_command(params, exec_timeout_ms),
         StepType::SysClipboardGet => exec_clipboard_get(),
         StepType::SysClipboardSet => exec_clipboard_set(params),
         _ => Err(SystemExecError::UnsupportedStep(step_type.to_string())),
@@ -349,7 +363,7 @@ fn exec_delete_path(params: &Value) -> Result<Value, SystemExecError> {
 }
 
 /// sys.exec — direct exec via std::process::Command (no shell)
-fn exec_command(params: &Value) -> Result<Value, SystemExecError> {
+fn exec_command(params: &Value, timeout_ms: Option<u64>) -> Result<Value, SystemExecError> {
     let command = require_str(params, "command")?;
     let args: Vec<String> = params
         .get("args")
@@ -382,6 +396,8 @@ fn exec_command(params: &Value) -> Result<Value, SystemExecError> {
     let mut cmd = Command::new(command);
     cmd.args(&args);
     cmd.current_dir(&cwd);
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
 
     // Environment handling
     if env_clean {
@@ -395,17 +411,66 @@ fn exec_command(params: &Value) -> Result<Value, SystemExecError> {
         }
     }
 
-    let output = cmd.output()?;
-    let exit_code = output.status.code().unwrap_or(-1);
+    let mut child = cmd.spawn()?;
 
-    let stdout_bytes = output.stdout.len();
-    let stderr_bytes = output.stderr.len();
+    // Drain stdout/stderr on separate threads so a chatty child cannot deadlock
+    // by filling a pipe buffer while we are waiting for it to exit.
+    let mut out_pipe = child.stdout.take();
+    let mut err_pipe = child.stderr.take();
+    let out_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(ref mut p) = out_pipe {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let err_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(ref mut p) = err_pipe {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    // Wait for exit, enforcing the deadline if one was given. On timeout the
+    // child is killed so it does not keep running after the step is abandoned.
+    let status = match timeout_ms {
+        Some(ms) => {
+            let deadline = Instant::now() + Duration::from_millis(ms);
+            loop {
+                match child.try_wait()? {
+                    Some(status) => break status,
+                    None => {
+                        if Instant::now() >= deadline {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            // Killing closes the pipes, so the reader threads finish.
+                            let _ = out_reader.join();
+                            let _ = err_reader.join();
+                            return Err(SystemExecError::Timeout(format!(
+                                "command '{command}' did not complete within {ms}ms and was killed"
+                            )));
+                        }
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                }
+            }
+        }
+        None => child.wait()?,
+    };
+
+    let stdout_vec = out_reader.join().unwrap_or_default();
+    let stderr_vec = err_reader.join().unwrap_or_default();
+    let exit_code = status.code().unwrap_or(-1);
+
+    let stdout_bytes = stdout_vec.len();
+    let stderr_bytes = stderr_vec.len();
 
     // Apply 1 MiB capture cap.
     let truncated = stdout_bytes > CAPTURE_CAP || stderr_bytes > CAPTURE_CAP;
 
-    let stdout_raw = &output.stdout[..stdout_bytes.min(CAPTURE_CAP)];
-    let stderr_raw = &output.stderr[..stderr_bytes.min(CAPTURE_CAP)];
+    let stdout_raw = &stdout_vec[..stdout_bytes.min(CAPTURE_CAP)];
+    let stderr_raw = &stderr_vec[..stderr_bytes.min(CAPTURE_CAP)];
 
     let mut stdout_str = String::from_utf8_lossy(stdout_raw).to_string();
     let mut stderr_str = String::from_utf8_lossy(stderr_raw).to_string();
@@ -417,7 +482,7 @@ fn exec_command(params: &Value) -> Result<Value, SystemExecError> {
         stderr_str.push_str(&format!("\n[TRUNCATED after {} bytes]", CAPTURE_CAP));
     }
 
-    if !output.status.success() {
+    if !status.success() {
         tracing::warn!(
             command = %command,
             exit_code = exit_code,
@@ -728,7 +793,7 @@ mod tests {
             "command": "echo",
             "args": ["hello", "world"]
         });
-        let result = exec_command(&params).unwrap();
+        let result = exec_command(&params, None).unwrap();
 
         assert_eq!(result["exit_code"], 0);
         assert_eq!(result["stdout"].as_str().unwrap().trim(), "hello world");
@@ -741,7 +806,7 @@ mod tests {
             "command": "pwd",
             "cwd": "/tmp"
         });
-        let result = exec_command(&params).unwrap();
+        let result = exec_command(&params, None).unwrap();
 
         // /tmp may resolve to /private/tmp on macOS
         let stdout = result["stdout"].as_str().unwrap().trim();
@@ -759,7 +824,7 @@ mod tests {
             "args": ["-c", "echo $MY_TEST_VAR"],
             "env": { "MY_TEST_VAR": "operator_test_value" }
         });
-        let result = exec_command(&params).unwrap();
+        let result = exec_command(&params, None).unwrap();
 
         assert_eq!(
             result["stdout"].as_str().unwrap().trim(),
@@ -774,7 +839,7 @@ mod tests {
             "env_clean": true,
             "env": { "ONLY_THIS": "yes" }
         });
-        let result = exec_command(&params).unwrap();
+        let result = exec_command(&params, None).unwrap();
 
         let stdout = result["stdout"].as_str().unwrap();
         assert!(stdout.contains("ONLY_THIS=yes"));
@@ -788,9 +853,28 @@ mod tests {
             "command": "sh",
             "args": ["-c", "exit 42"]
         });
-        let result = exec_command(&params).unwrap();
+        let result = exec_command(&params, None).unwrap();
 
         assert_eq!(result["exit_code"], 42);
+    }
+
+    #[test]
+    fn test_exec_times_out_and_kills_child() {
+        // A 10s sleep with a 300ms deadline must return a Timeout error promptly
+        // (the child is killed), not block for the full sleep duration.
+        let params = json!({ "command": "sleep", "args": ["10"] });
+        let start = Instant::now();
+        let result = exec_command(&params, Some(300));
+        let elapsed = start.elapsed();
+
+        assert!(
+            matches!(result, Err(SystemExecError::Timeout(_))),
+            "expected Timeout, got {result:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "should return near the 300ms deadline, took {elapsed:?}"
+        );
     }
 
     #[test]

@@ -6,6 +6,10 @@ import Foundation
 
 let maxLineBytes = 1_048_576  // 1 MiB
 
+/// Helper version reported in the ui.ping handshake. Keep in sync with the Rust
+/// workspace version in Cargo.toml ([workspace.package] version).
+let helperVersion = "0.7.1"
+
 // ---------------------------------------------------------------------------
 // Register methods
 // ---------------------------------------------------------------------------

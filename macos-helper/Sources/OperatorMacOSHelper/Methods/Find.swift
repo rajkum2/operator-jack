@@ -21,8 +21,14 @@ func handleFind(_ params: [String: JSONValue]) throws -> [String: JSONValue] {
     }
 
     let windowElement = try resolveWindow(appElement: appElement, scope: selector.window)
-    let maxDepth = selector.maxDepth ?? 12
-    let results = findElements(root: windowElement, selector: selector, maxDepth: maxDepth, maxResults: 100)
+    let results: [FoundElement]
+    if let alternatives = selector.anyOf, !alternatives.isEmpty {
+        // any_of: try each alternative; first with exactly one match wins.
+        results = resolveAnyOf(root: windowElement, alternatives: alternatives, maxResults: 100)
+    } else {
+        let maxDepth = selector.maxDepth ?? 12
+        results = findElements(root: windowElement, selector: selector, maxDepth: maxDepth, maxResults: 100)
+    }
 
     let appName: String
     if case .string(let n) = params["app"] {

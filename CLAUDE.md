@@ -2,6 +2,7 @@
 
 > Instructions for AI assistants working on this project.
 > Read `PROJECT_CONTEXT.md` first for state tracking. This file covers conventions and build instructions.
+> The authoritative forward roadmap (M7-M15) is `MASTER_PLAN.md` at the repo root.
 
 ## Project Overview
 
@@ -20,11 +21,11 @@ export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 # Build Rust workspace
 cd /Users/kirankumaralugonda/operator-jack && cargo build
 
-# Run Rust tests (91 tests)
+# Run Rust tests (128 tests)
 cargo test
 
-# Build Swift helper
-cd macos-helper && swift build
+# Build Swift helper and run Swift tests (9 tests)
+cd macos-helper && swift build && swift test
 
 # Run the CLI
 ./target/debug/operator-jack doctor
@@ -41,19 +42,26 @@ operator-jack/
 │   ├── operator-runtime/    # Execution engine, policy gates, retry/timeout, disambiguation
 │   ├── operator-store/      # SQLite persistence (rusqlite + rusqlite_migration)
 │   ├── operator-exec-system/# sys.* step handlers (file ops, exec, clipboard)
+│   ├── operator-exec-browser/# browser.* CDP executor (M5) - tokio-tungstenite + reqwest
 │   ├── operator-ipc/        # NDJSON IPC client for Swift helper
-│   └── operator-planner/    # Rule-based planner (M4) - LLM provider abstraction
+│   ├── operator-planner/    # LLM planner (M4) - Kimi/OpenAI/Anthropic/Ollama providers
+│   └── operator-skills/     # Skill manifests (M6) - parse/validate/expand to plans
 ├── macos-helper/            # Swift SPM package
-│   └── Sources/OperatorMacOSHelper/
-│       ├── main.swift       # NDJSON server loop, handler registration
-│       ├── IpcProtocol.swift # Request/response types, JSONValue enum
-│       ├── MethodDispatcher.swift # Method routing, HelperError type
-│       ├── AXUtilities.swift # Shared AX foundation (selectors, traversal, waits, disambiguation)
-│       └── Methods/         # One file per handler (FocusApp, Find, Click, etc.)
+│   ├── Sources/OperatorMacOSHelper/
+│   │   ├── main.swift       # NDJSON server loop, handler registration
+│   │   ├── IpcProtocol.swift # Request/response types, JSONValue enum
+│   │   ├── MethodDispatcher.swift # Method routing, HelperError type
+│   │   ├── AXUtilities.swift # Shared AX foundation (selectors, traversal, waits, disambiguation)
+│   │   └── Methods/         # One file per handler (FocusApp, Find, Click, etc.)
+│   └── Tests/OperatorMacOSHelperTests/ # Swift test target (9 tests)
+├── skills/                  # Built-in skill manifests (M6): open-and-type, create-note, take-screenshot
 ├── docs/
 │   ├── examples/            # Golden plan JSONs for acceptance testing
 │   └── *.md                 # Architecture, security, selectors, permissions, roadmap
-├── SPEC_FREEZE_V0.4.md     # Active spec delta (M4 additions - natural language planner)
+├── MASTER_PLAN.md          # Authoritative forward roadmap (M7-M15)
+├── SPEC_FREEZE_V0.6.md     # M5 spec (browser executor / CDP)
+├── SPEC_FREEZE_V0.5.md     # M6 spec (skills; written retroactively)
+├── SPEC_FREEZE_V0.4.md     # M4 spec (LLM planner)
 ├── SPEC_FREEZE_V0.3.md     # M3 spec (UI executor v1)
 ├── SPEC_FREEZE_V0.2.md     # Base normative spec (M0-M3)
 ├── PROJECT_CONTEXT.md       # State tracker, version log, resume file
@@ -71,7 +79,7 @@ operator-jack/
 ### Execution Lanes
 - **System lane** (`sys.*`): Rust-native, runs on worker thread with timeout
 - **UI lane** (`ui.*`): Dispatched to Swift helper via NDJSON IPC
-- **Browser lane** (`browser.*`): Not yet implemented (M5, will use CDP)
+- **Browser lane** (`browser.*`): Implemented (M5) via CDP, but reachable ONLY through the `browser` CLI subcommands (doctor/launch/navigate/screenshot). Browser steps in plans are NOT yet wired into the engine — a plan containing `browser.*` steps fails validation today (expected). Plan-lane wiring is milestone M12 in MASTER_PLAN.md.
 
 ### Error Handling
 - Rust: `thiserror` for library crates, `anyhow` for CLI
@@ -100,13 +108,17 @@ operator-jack/
 - Suffix convention: `name` = exact match, `name_contains` = substring (case-insensitive)
 
 ### Testing
-- Rust: `cargo test` — unit tests in each crate's source files
-- Swift: No unit test framework yet — manual testing via NDJSON pipe or CLI
-- Acceptance: Golden plan JSONs in `docs/examples/`, run via `operator-jack run --plan-file <path> --mode unsafe --yes`
+- Rust: `cargo test` — unit tests in each crate's source files (128 tests)
+- Swift: `cd macos-helper && swift test` — XCTest target at `Tests/OperatorMacOSHelperTests/` (9 tests; selector parsing + criteria). AX-dependent behavior is covered by the live acceptance harness.
+- Acceptance: `make check-examples` validates every golden plan in `docs/examples/` and dry-run-expands every skill. **No example or skill ships without passing it.** Run a plan live via `operator-jack run --plan-file <path> --mode unsafe --yes`.
 
 ## Spec Files
 
-- **SPEC_FREEZE_V0.3.md** — Active delta: new step types (list_windows, focus_window), window scoping, anyOf, element_ref, error taxonomy, evidence hooks, `operator-jack ui inspect`
+- **MASTER_PLAN.md** — Authoritative forward roadmap (M7-M15). Read this for what's next.
+- **SPEC_FREEZE_V0.6.md** — M5 delta: browser lane (`browser.*` step types, CDP, tokio, Chrome process management, `allow_domains` for browser)
+- **SPEC_FREEZE_V0.5.md** — M6 skills spec (written retroactively): manifest schema, parameters, expansion to plans
+- **SPEC_FREEZE_V0.4.md** — M4 delta: LLM planner, `do` command, provider configuration
+- **SPEC_FREEZE_V0.3.md** — Delta: new step types (list_windows, focus_window), window scoping, anyOf, element_ref, error taxonomy, evidence hooks, `operator-jack ui inspect`
 - **SPEC_FREEZE_V0.2.md** — Base spec: all step types, validation rules, policy, IPC protocol, CLI commands
 - Never edit frozen specs. Create new `SPEC_FREEZE_V0.x.md` for changes.
 
@@ -119,14 +131,16 @@ operator-jack/
 | M2 | DONE | Swift helper v1, NDJSON IPC, ping/accessibility/listApps |
 | M3a | DONE | 9 UI handlers (focus, find, wait, click, type, read, keyPress), disambiguation, 85 tests |
 | M3b | DONE | selectMenu, setValue, inspect, anyOf, element_ref, evidence hooks, 91 tests |
-| M4 | DONE | Rule-based planner (natural language → typed steps) |
-| M5 | NOT STARTED | Browser executor (CDP) |
-| M6-M8 | NOT STARTED | Skills, robustness, STT |
+| M4 | DONE | LLM planner (natural language → typed steps; Kimi/OpenAI/Anthropic/Ollama) |
+| M5 | DONE | Browser executor (CDP) — via `browser` CLI subcommands only; plan-lane wiring is M12 |
+| M6 | DONE | Skills system (manifest → plan expansion; skill list/validate/run) |
+| Phase B | DONE | Stabilization (v0.7.1): audit fixes, Swift correctness, security fixes, docs |
+| M7-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md (M7=perception, M8=safety, M9=MCP, M10=agent loop, M11=long-horizon, M12=browser wiring, M13=control flow, M14=AppleScript/OCR, M15=trust) |
 
 ## Important Rules
 
-1. **Spec is normative.** Check SPEC_FREEZE_V0.3.md + V0.2.md before inventing behavior.
-2. **No async until M5.** Use sync Rust. No tokio dependency.
+1. **Spec is normative.** Check the relevant SPEC_FREEZE (V0.2 base; V0.3 UI; V0.4 planner; V0.5 skills; V0.6 browser) before inventing behavior; check MASTER_PLAN.md for anything M7+.
+2. **Async allowed (M5+).** tokio is now a dependency (`operator-cli`, `operator-exec-browser`) for the browser/CDP lane. The old "no async / no tokio" rule is obsolete.
 3. **Every change must compile.** Run `cargo build && cargo test && cd macos-helper && swift build`.
 4. **Update PROJECT_CONTEXT.md** after completing milestones.
 5. **Redact before logging.** Apply redaction rules from spec Section 18.
@@ -138,9 +152,9 @@ operator-jack/
 
 | IPC Method | Handler | File |
 |-----------|---------|------|
-| ui.ping | handlePing | Handlers/Ping.swift |
-| ui.checkAccessibilityPermission | handleCheckAccessibility | Handlers/CheckAccessibility.swift |
-| ui.listApps | handleListApps | Handlers/ListApps.swift |
+| ui.ping | handlePing | Methods/Ping.swift |
+| ui.checkAccessibilityPermission | handleCheckAccessibility | Methods/CheckAccessibility.swift |
+| ui.listApps | handleListApps | Methods/ListApps.swift |
 | ui.focusApp | handleFocusApp | Methods/FocusApp.swift |
 | ui.listWindows | handleListWindows | Methods/ListWindows.swift |
 | ui.focusWindow | handleFocusWindow | Methods/FocusWindow.swift |
@@ -178,6 +192,21 @@ operator-jack ui inspect --app <name> [--depth N]
 operator-jack init                      # Create config file
 ```
 
+### Skills (M6)
+```
+operator-jack skill list                          # List discovered skills
+operator-jack skill validate <skill-file>         # Validate a skill manifest
+operator-jack skill run <name> --param key=value  # Expand skill to a plan and run it
+```
+
+### Browser (M5 — CLI-only, not yet wired into plans)
+```
+operator-jack browser doctor                      # Check Chrome availability
+operator-jack browser launch [--port 9222]        # Launch Chrome with remote debugging
+operator-jack browser navigate <url> [--port N]   # Navigate to a URL via CDP
+operator-jack browser screenshot --output <path> [--full-page] [--port N]
+```
+
 ## Common Flags
 
 ```
@@ -187,5 +216,8 @@ operator-jack init                      # Create config file
 --json                # JSON output format
 --helper-path <path>  # Custom helper binary path
 --allow-apps <list>   # Comma-separated app allowlist
+--allow-domains <list># Comma-separated domain allowlist
+--interactive         # Force interactive prompts
+--no-interactive      # Disable interactive prompts
 -v / -q               # Verbose / quiet
 ```

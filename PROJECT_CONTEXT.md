@@ -9,7 +9,7 @@
 ## Quick Start (For New Session)
 
 1. Read this file completely
-2. Read the active spec: `SPEC_FREEZE_V0.3.md` (additive delta) + `SPEC_FREEZE_V0.2.md` (base)
+2. Read the roadmap: `MASTER_PLAN.md` (authoritative, M7-M15). Newest specs: `SPEC_FREEZE_V0.6.md` (M5 browser) + `SPEC_FREEZE_V0.5.md` (M6 skills, retroactive); base contract: `SPEC_FREEZE_V0.2.md`
 3. Check `VERSION_LOG` below for what changed last
 4. Check `CURRENT_STATE` below for what's built vs pending
 5. Check `NEXT_ACTIONS` for what to do next
@@ -22,7 +22,7 @@
 - **Name:** Operator Jack (`operator-jack`)
 - **What:** macOS-first CLI tool for deterministic computer automation
 - **Architecture:** Instruction → Plan (typed JSON steps) → Policy Gate → Executors → Logs → Result
-- **Three execution lanes:** System (Rust), UI/Accessibility (Swift helper via IPC), Browser/CDP (future)
+- **Three execution lanes:** System (Rust), UI/Accessibility (Swift helper via IPC), Browser/CDP (M5 — CLI subcommands only; plan-lane wiring is M12)
 - **Repo root:** `/Users/kirankumaralugonda/operator-jack/`
 - **Language:** Rust (core) + Swift (macOS helper)
 
@@ -33,7 +33,11 @@
 | File | Purpose |
 |------|---------|
 | `PROJECT_CONTEXT.md` | THIS FILE — resume context, version log, state tracker |
-| `SPEC_FREEZE_V0.3.md` | Active spec additive delta for M3 (new step types, window scoping, error taxonomy) |
+| `MASTER_PLAN.md` | Authoritative forward roadmap (M7-M15) |
+| `SPEC_FREEZE_V0.6.md` | M5 spec delta — browser executor / CDP |
+| `SPEC_FREEZE_V0.5.md` | M6 spec — skills system (written retroactively) |
+| `SPEC_FREEZE_V0.4.md` | M4 spec delta — LLM planner + `do` command |
+| `SPEC_FREEZE_V0.3.md` | M3 spec additive delta (new step types, window scoping, error taxonomy) |
 | `SPEC_FREEZE_V0.2.md` | Base normative spec (frozen contract for M0-M3) |
 | `SPEC_FREEZE_V0.1.md` | Previous spec version (archived, do not implement from) |
 | `crates/operator-cli/` | CLI binary (`operator-jack`, clap) |
@@ -41,7 +45,10 @@
 | `crates/operator-runtime/` | Execution loop, policy gates, retry/timeout |
 | `crates/operator-store/` | SQLite persistence (rusqlite) |
 | `crates/operator-exec-system/` | sys.* step handlers |
+| `crates/operator-exec-browser/` | browser.* CDP executor (M5) — tokio-tungstenite + reqwest |
 | `crates/operator-ipc/` | NDJSON IPC client for Swift helper |
+| `crates/operator-planner/` | LLM planner (M4) — Kimi/OpenAI/Anthropic/Ollama |
+| `crates/operator-skills/` | Skills system (M6) — manifest parse/validate/expand |
 | `macos-helper/` | Swift SPM package for AX automation |
 | `docs/` | Architecture, security, selectors, permissions, roadmap |
 | `docs/examples/` | Example plan JSON files |
@@ -59,17 +66,50 @@
 | IPC | stdin/stdout NDJSON pipes | Simplest for parent-child; no socket cleanup |
 | IDs | ULID (`ulid` crate) | Sortable, no coordination needed |
 | CLI | `clap` (derive) | Standard Rust CLI |
-| Async | None for M0-M3 (sync). Tokio added at M5 for CDP | Avoids unnecessary complexity |
+| Async | Sync for M0-M4; tokio added at M5 for the CDP browser lane (operator-cli + operator-exec-browser) | Async only where CDP requires it |
 | Serialization | `serde` + `serde_json` | Standard |
 | Error handling | `anyhow` (CLI) + `thiserror` (libraries) | Standard pattern |
 | Logging | `tracing` | Structured, flexible |
 | Paths | `dirs` crate | XDG-compliant platform paths |
 | Swift AX | Raw ApplicationServices (no AXSwift) | AXSwift unmaintained; raw API is ~10 functions |
-| CDP (M5+) | `chromiumoxide` | Most downloads, adequate |
+| CDP (M5) | Hand-rolled CDP client over `tokio-tungstenite` + `reqwest` | Full protocol control; no heavyweight browser-automation dependency |
 
 ---
 
 ## VERSION_LOG
+
+### v0.7.1 — 2026-07-08
+**Status:** Phase B complete. Stabilization & reconciliation — no new features; audit fixes, Swift helper correctness, shipped-code security fixes, docs. 128 Rust tests + 9 Swift tests pass.
+**Changes:**
+1. (B1) Pipeline/repo hygiene: `cargo fmt` the workspace; committed the regenerated `Cargo.lock`; added `--locked` to CI/release build steps
+2. (B2) Swift helper correctness: `findElements` now matches the root element; `waitFor` resolves the window inside the poll loop (was instant WINDOW_NOT_FOUND); wired `resolveElementRef` into Click/ReadText/SetValue; guarded the `SelectMenu` AXUIElement cast; synced the hardcoded helper version to 0.7.1
+3. (B2) Created the Swift test target `macos-helper/Tests/OperatorMacOSHelperTests/` (9 tests) — previously zero Swift tests existed
+4. (B3) Fixed shipped examples/skills: `docs/examples/calculator-buttons.json`, `skills/create-note.yaml`, `skills/take-screenshot.yaml`; `skill run` now validates the plan before executing; skill numeric params preserve integer type
+5. (B3) Added `make check-examples` harness (validate all example plans + dry-run all skills); wired into CI
+6. (B4) Runtime/security fixes: ui-lane IPC read timeout with helper kill+respawn; `sys.exec` kills its child process on timeout; **mode-ceiling security fix** — `plan.mode` can no longer escalate above the configured mode (effective = min(plan, config)); browser JS-injection escaping fix; char-boundary slicing panic fixes; `resolve_helper_path` now consults the config `helper_path`
+7. (B4) Planner: fence-extraction fix; Anthropic default model bumped to `claude-haiku-4-5-20251001`
+8. (B5) Distribution: Homebrew formula bumped to v0.7.1 (release workflow gains a tap-update step); README gains an Installation section; removed false `plan list`/`--set` claims; documented real flags
+9. (B6) Docs reconciliation: `MASTER_PLAN.md` is now the authoritative M7-M15 roadmap; updated CLAUDE.md / PROJECT_CONTEXT / CHANGELOG; `doctor` gains a provider-readiness check; `docs/ROADMAP.md` marked superseded
+
+### v0.7.0 — 2026-03
+**Status:** M5 complete. Browser executor via Chrome DevTools Protocol (CDP). Workspace grows to 9 crates. First async in the codebase.
+**Changes:**
+1. Created `operator-exec-browser` crate — a hand-rolled CDP client over `tokio-tungstenite` (WebSocket) + `reqwest` (Chrome discovery); NOT chromiumoxide
+2. Added `tokio` async runtime (`operator-cli` + `operator-exec-browser`)
+3. Chrome process management: launch with `--remote-debugging-port`, connect, cleanup
+4. New `browser.*` step types (see SPEC_FREEZE_V0.6.md); `allow_domains` enforcement for browser navigation
+5. CLI: `operator-jack browser doctor|launch|navigate|screenshot`; browser executor tests added
+6. Created SPEC_FREEZE_V0.6.md (M5 browser spec)
+7. **Caveat:** the browser lane is reachable ONLY via the `browser` CLI subcommands. Browser steps in plans are NOT yet wired into the engine (a plan with `browser.*` steps fails validation) — plan-lane wiring is milestone M12 in MASTER_PLAN.md
+
+### v0.6.0 — 2026-03
+**Status:** M6 complete. Skills system (reusable parameterized macros). 113 tests pass (5 new skill tests). Workspace grows to 8 crates.
+**Changes:**
+1. Created `operator-skills` crate — YAML/JSON manifest parsing, parameter validation/interpolation, expansion to a full plan at execution time (no new runtime concepts)
+2. Skill registry — discovers skills from multiple paths (project `skills/`, user dir)
+3. CLI: `operator-jack skill list|validate|run` (`--param key=value`)
+4. Added 3 example skills in `skills/`: open-and-type, create-note, take-screenshot
+5. (Note: the M6 skills spec, SPEC_FREEZE_V0.5.md, was written retroactively in Phase B — see v0.7.1 above)
 
 ### v0.5.0 — 2026-03-14
 **Status:** M4 Complete. Rule-based planner with multi-provider LLM support.
@@ -210,13 +250,13 @@
 - [x] SPEC_FREEZE_V0.1.md (archived)
 - [x] SPEC_FREEZE_V0.2.md (active spec)
 - [x] PROJECT_CONTEXT.md (this file)
-- [x] Rust workspace scaffolding (7 crates)
+- [x] Rust workspace scaffolding (9 crates: cli, core, runtime, store, exec-system, exec-browser, ipc, planner, skills)
 - [x] operator-core: types, validation, interpolation, redaction, events, policy
 - [x] operator-store: SQLite migrations, CRUD repos (12 unit tests passing)
 - [x] operator-ipc: protocol types, real IPC client with NDJSON framing
 - [x] operator-exec-system: real implementations for all 13 sys.* step types (21 unit tests)
 - [x] operator-runtime: execution engine, policy gates, JSONL logging
-- [x] operator-cli: all commands (doctor, plan, exec, run, logs, stop)
+- [x] operator-cli: all commands (doctor, plan, exec, run, do, logs, stop, ui inspect, init, skill, browser)
 - [x] Documentation: ARCHITECTURE.md, SECURITY.md, SELECTORS.md, PERMISSIONS_MACOS.md, ROADMAP.md
 - [x] Example plans: 11 golden plans in docs/examples/ (open-app, file-operations, notes-automation, chrome-search, calculator-buttons, notes-create-m3, system-settings-nav, multi-window, disambiguation-test, select-menu-test, element-ref-reuse, full-end-to-end)
 - [x] README.md
@@ -244,6 +284,15 @@
 - [x] CLI commands: skill list, validate, run
 - [x] Example skills: open-and-type, create-note, take-screenshot
 - [x] 113 tests passing (5 new skill tests)
+- [x] SPEC_FREEZE_V0.6.md (M5 browser spec)
+- [x] operator-exec-browser crate — hand-rolled CDP client (tokio-tungstenite + reqwest, NOT chromiumoxide)
+- [x] tokio async runtime added (operator-cli + operator-exec-browser)
+- [x] CLI: browser doctor/launch/navigate/screenshot (browser lane is CLI-only; plan-lane wiring is M12)
+- [x] Phase B (v0.7.1): audit fixes, Swift helper correctness, security fixes (mode ceiling, JS-injection escaping, exec/ui-lane timeouts, char-boundary panics), docs reconciliation
+- [x] Swift test target (macos-helper/Tests/OperatorMacOSHelperTests): 9 tests
+- [x] `make check-examples` harness (validate examples + dry-run skills), wired into CI
+- [x] MASTER_PLAN.md — authoritative forward roadmap (M7-M15)
+- [x] 128 Rust tests + 9 Swift tests passing (v0.7.1)
 
 ### Milestone Status
 
@@ -255,31 +304,29 @@
 | M3a | DONE | UI executor v1 core: focusApp/Window, find, waitFor, click, typeText, readText, keyPress, disambiguation |
 | M3b | DONE | UI executor v1 polish: selectMenu, setValue, inspect, anyOf selectors, element_ref, evidence hooks |
 | Phase A | DONE | Production packaging: binary rename, config system, Makefile, CI, Homebrew, install script, LICENSE, CHANGELOG, enhanced doctor |
-| M4 | DONE | Rule-based planner (natural language → typed steps) |
-| M5 | DONE | Browser executor (CDP) |
-| M6 | DONE | Skills system (macros) |
-| M7 | NOT STARTED | Robustness + recovery |
-| M8 | NOT STARTED | Offline STT input |
+| M4 | DONE | LLM planner (natural language → typed steps; Kimi/OpenAI/Anthropic/Ollama) |
+| M5 | DONE | Browser executor (CDP) — `browser` CLI subcommands only; plan-lane wiring is M12 |
+| M6 | DONE | Skills system (manifest → plan expansion; skill list/validate/run) |
+| Phase B | DONE | Stabilization (v0.7.1): audit/security fixes, Swift correctness + test target, docs reconciliation |
+| M7-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md — M7 perception, M8 safety envelope, M9 MCP, M10 agent loop, M11 long-horizon, M12 browser wiring, M13 control flow, M14 AppleScript/OCR, M15 trust |
 
 ---
 
 ## NEXT_ACTIONS
 
-**Immediate next steps (in order):**
+**Immediate next steps (in order) — see MASTER_PLAN.md for full detail:**
 
-1. **Push to GitHub + tag v0.5.0** — trigger CI and release
-2. **Create `rajkum2/homebrew-tap` repo** — publish the formula with release tarball SHA256
-3. **Build M6 (Skills System)** — `operator-jack skill run daily-standup --param title="Sprint 42"`
-4. **Build M5 (Browser/CDP)** — Chrome automation via DevTools Protocol
+1. **M7 — Perception: the Observation API (v0.8.0)** — give models eyes: `ui.snapshot` (compact AX-tree serialization with element refs), `ui.screenshot` (ScreenCaptureKit), Electron/Chromium AX enablement, refs accepted by click/read_text/set_value.
+2. **M8 — Safety Envelope (v0.9.0)** — task-scoped grants, run budgets, Keychain secret store, always-escalate classifier. Can proceed in parallel with M7.
 
-**M4 is COMPLETE.** Rule-based planner with multi-provider LLM support is implemented.
+**MASTER_PLAN.md is the authoritative roadmap for M7-M15.** M0-M6 plus Phase B (v0.7.1) are complete.
 
 ---
 
 ## CRITICAL RULES (Read Before Writing Code)
 
 1. **Spec is normative.** If unsure about behavior, check SPEC_FREEZE_V0.2.md. Do not invent behavior.
-2. **No async until M5.** Use sync Rust for M0-M3. No tokio dependency.
+2. **Async landed at M5.** M0-M4 are sync; tokio is now a dependency (operator-cli + operator-exec-browser) for the CDP browser lane.
 3. **Every milestone must compile and run.** No broken intermediate states.
 4. **Keep modules decoupled.** No giant files. Each crate has clear responsibility.
 5. **No network calls** unless user explicitly runs browser automation.
@@ -321,4 +368,4 @@ When multiple AX elements match and no `index` is given: interactive mode prompt
 
 ---
 
-*Last updated: 2026-03-14 — M4 COMPLETE. Rule-based planner with multi-provider LLM support (Kimi, OpenAI, Anthropic, Ollama). `operator-jack do` command for natural language execution. 108 tests passing. Ready for M5/M6.*
+*Last updated: 2026-07-08 — Phase B COMPLETE (v0.7.1). M0-M6 done: system + UI + browser (CDP) lanes, LLM planner (Kimi/OpenAI/Anthropic/Ollama), skills system. Phase B stabilization: audit/security fixes, Swift helper correctness + new Swift test target, docs reconciliation. 128 Rust tests + 9 Swift tests passing. Next: M7 (Perception) per MASTER_PLAN.md.*

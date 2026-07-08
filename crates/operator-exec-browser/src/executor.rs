@@ -9,6 +9,16 @@ use tracing::{debug, info};
 use crate::client::{discover_chrome_ws_url, launch_chrome, BrowserClient};
 use crate::error::BrowserError;
 
+/// Encodes a string as a JavaScript string literal (double-quoted, fully
+/// escaped) via JSON, whose string syntax is a valid subset of JS. This is the
+/// safe way to embed a user/selector/text value into an injected script: it
+/// escapes quotes, backslashes, and newlines, preventing the value from
+/// breaking out of the literal or injecting arbitrary JS. The result includes
+/// the surrounding quotes, so embed it bare (not inside your own quotes).
+fn js_string(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
+}
+
 /// Executor for browser automation steps.
 pub struct BrowserExecutor {
     /// Chrome process (if we launched it).
@@ -130,7 +140,11 @@ impl BrowserExecutor {
     }
 
     /// Handle browser.navigate step.
-    async fn handle_navigate(&self, client: &BrowserClient, params: &Value) -> Result<Value, BrowserError> {
+    async fn handle_navigate(
+        &self,
+        client: &BrowserClient,
+        params: &Value,
+    ) -> Result<Value, BrowserError> {
         let url = params
             .get("url")
             .and_then(|v| v.as_str())
@@ -143,7 +157,10 @@ impl BrowserExecutor {
         let frame_id = client.navigate(url).await?;
 
         // Wait for navigation to complete
-        let wait_ms = params.get("wait_ms").and_then(|v| v.as_u64()).unwrap_or(1000);
+        let wait_ms = params
+            .get("wait_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1000);
         tokio::time::sleep(Duration::from_millis(wait_ms)).await;
 
         Ok(serde_json::json!({
@@ -153,18 +170,23 @@ impl BrowserExecutor {
     }
 
     /// Handle browser.click step.
-    async fn handle_click(&self, client: &BrowserClient, params: &Value) -> Result<Value, BrowserError> {
+    async fn handle_click(
+        &self,
+        client: &BrowserClient,
+        params: &Value,
+    ) -> Result<Value, BrowserError> {
         let selector = params
             .get("selector")
             .and_then(|v| v.as_str())
             .ok_or_else(|| BrowserError::CdpError("Missing 'selector' parameter".to_string()))?;
 
-        // Use JavaScript to find and click the element
+        // Use JavaScript to find and click the element.
+        let sel = js_string(selector);
         let script = format!(
             r#"
             (function() {{
-                const el = document.querySelector('{}');
-                if (!el) throw new Error('Element not found: {}');
+                const el = document.querySelector({sel});
+                if (!el) throw new Error('Element not found: ' + {sel});
                 const rect = el.getBoundingClientRect();
                 el.click();
                 return {{
@@ -172,9 +194,7 @@ impl BrowserExecutor {
                     y: rect.top + rect.height / 2
                 }};
             }})()
-            "#,
-            selector.replace("'", "\\'"),
-            selector
+            "#
         );
 
         let result = client.execute_js(script).await?;
@@ -182,7 +202,11 @@ impl BrowserExecutor {
     }
 
     /// Handle browser.type step.
-    async fn handle_type(&self, client: &BrowserClient, params: &Value) -> Result<Value, BrowserError> {
+    async fn handle_type(
+        &self,
+        client: &BrowserClient,
+        params: &Value,
+    ) -> Result<Value, BrowserError> {
         let selector = params
             .get("selector")
             .and_then(|v| v.as_str())
@@ -193,22 +217,21 @@ impl BrowserExecutor {
             .and_then(|v| v.as_str())
             .ok_or_else(|| BrowserError::CdpError("Missing 'text' parameter".to_string()))?;
 
-        // Use JavaScript to focus and set value
+        // Use JavaScript to focus and set value.
+        let sel = js_string(selector);
+        let val = js_string(text);
         let script = format!(
             r#"
             (function() {{
-                const el = document.querySelector('{}');
-                if (!el) throw new Error('Element not found: {}');
+                const el = document.querySelector({sel});
+                if (!el) throw new Error('Element not found: ' + {sel});
                 el.focus();
-                el.value = '{}';
+                el.value = {val};
                 el.dispatchEvent(new Event('input', {{ bubbles: true }}));
                 el.dispatchEvent(new Event('change', {{ bubbles: true }}));
                 return true;
             }})()
-            "#,
-            selector.replace("'", "\\'"),
-            selector,
-            text.replace("'", "\\'")
+            "#
         );
 
         client.execute_js(script).await?;
@@ -216,22 +239,25 @@ impl BrowserExecutor {
     }
 
     /// Handle browser.get_text step.
-    async fn handle_get_text(&self, client: &BrowserClient, params: &Value) -> Result<Value, BrowserError> {
+    async fn handle_get_text(
+        &self,
+        client: &BrowserClient,
+        params: &Value,
+    ) -> Result<Value, BrowserError> {
         let selector = params
             .get("selector")
             .and_then(|v| v.as_str())
             .ok_or_else(|| BrowserError::CdpError("Missing 'selector' parameter".to_string()))?;
 
+        let sel = js_string(selector);
         let script = format!(
             r#"
             (function() {{
-                const el = document.querySelector('{}');
-                if (!el) throw new Error('Element not found: {}');
+                const el = document.querySelector({sel});
+                if (!el) throw new Error('Element not found: ' + {sel});
                 return el.textContent || el.innerText || '';
             }})()
-            "#,
-            selector.replace("'", "\\'"),
-            selector
+            "#
         );
 
         let text = client.execute_js(script).await?;
@@ -239,7 +265,11 @@ impl BrowserExecutor {
     }
 
     /// Handle browser.get_attribute step.
-    async fn handle_get_attribute(&self, client: &BrowserClient, params: &Value) -> Result<Value, BrowserError> {
+    async fn handle_get_attribute(
+        &self,
+        client: &BrowserClient,
+        params: &Value,
+    ) -> Result<Value, BrowserError> {
         let selector = params
             .get("selector")
             .and_then(|v| v.as_str())
@@ -250,17 +280,16 @@ impl BrowserExecutor {
             .and_then(|v| v.as_str())
             .ok_or_else(|| BrowserError::CdpError("Missing 'attribute' parameter".to_string()))?;
 
+        let sel = js_string(selector);
+        let attr = js_string(attribute);
         let script = format!(
             r#"
             (function() {{
-                const el = document.querySelector('{}');
-                if (!el) throw new Error('Element not found: {}');
-                return el.getAttribute('{}') || '';
+                const el = document.querySelector({sel});
+                if (!el) throw new Error('Element not found: ' + {sel});
+                return el.getAttribute({attr}) || '';
             }})()
-            "#,
-            selector.replace("'", "\\'"),
-            selector,
-            attribute.replace("'", "\\'")
+            "#
         );
 
         let value = client.execute_js(script).await?;
@@ -268,7 +297,11 @@ impl BrowserExecutor {
     }
 
     /// Handle browser.execute_js step.
-    async fn handle_execute_js(&self, client: &BrowserClient, params: &Value) -> Result<Value, BrowserError> {
+    async fn handle_execute_js(
+        &self,
+        client: &BrowserClient,
+        params: &Value,
+    ) -> Result<Value, BrowserError> {
         let script = params
             .get("script")
             .and_then(|v| v.as_str())
@@ -279,7 +312,11 @@ impl BrowserExecutor {
     }
 
     /// Handle browser.screenshot step.
-    async fn handle_screenshot(&self, client: &BrowserClient, params: &Value) -> Result<Value, BrowserError> {
+    async fn handle_screenshot(
+        &self,
+        client: &BrowserClient,
+        params: &Value,
+    ) -> Result<Value, BrowserError> {
         let full_page = params
             .get("full_page")
             .and_then(|v| v.as_bool())
@@ -288,7 +325,8 @@ impl BrowserExecutor {
         let image_data = client.screenshot(full_page).await?;
 
         // Encode to base64 for JSON response
-        let base64_data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &image_data);
+        let base64_data =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &image_data);
 
         Ok(serde_json::json!({
             "format": "png",
@@ -299,7 +337,11 @@ impl BrowserExecutor {
     }
 
     /// Handle browser.wait_for step.
-    async fn handle_wait_for(&self, client: &BrowserClient, params: &Value) -> Result<Value, BrowserError> {
+    async fn handle_wait_for(
+        &self,
+        client: &BrowserClient,
+        params: &Value,
+    ) -> Result<Value, BrowserError> {
         let selector = params
             .get("selector")
             .and_then(|v| v.as_str())
@@ -310,13 +352,14 @@ impl BrowserExecutor {
             .and_then(|v| v.as_u64())
             .unwrap_or(10000);
 
+        let sel = js_string(selector);
         let script = format!(
             r#"
             new Promise((resolve, reject) => {{
                 const startTime = Date.now();
-                const timeout = {};
-                const selector = '{}';
-                
+                const timeout = {timeout_ms};
+                const selector = {sel};
+
                 const check = () => {{
                     const el = document.querySelector(selector);
                     if (el) {{
@@ -329,12 +372,15 @@ impl BrowserExecutor {
                 }};
                 check();
             }})
-            "#,
-            timeout_ms,
-            selector.replace("'", "\\'")
+            "#
         );
 
-        match timeout(Duration::from_millis(timeout_ms + 1000), client.execute_js(script)).await {
+        match timeout(
+            Duration::from_millis(timeout_ms + 1000),
+            client.execute_js(script),
+        )
+        .await
+        {
             Ok(Ok(_result)) => Ok(serde_json::json!({ "found": true })),
             Ok(Err(e)) => Err(e),
             Err(_) => Err(BrowserError::Timeout(format!(
@@ -345,14 +391,15 @@ impl BrowserExecutor {
     }
 
     /// Handle browser.scroll step.
-    async fn handle_scroll(&self, client: &BrowserClient, params: &Value) -> Result<Value, BrowserError> {
+    async fn handle_scroll(
+        &self,
+        client: &BrowserClient,
+        params: &Value,
+    ) -> Result<Value, BrowserError> {
         let x = params.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
         let y = params.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
 
-        let script = format!(
-            "window.scrollTo({}, {})",
-            x, y
-        );
+        let script = format!("window.scrollTo({}, {})", x, y);
 
         client.execute_js(script).await?;
         Ok(serde_json::json!({ "x": x, "y": y }))
@@ -378,7 +425,8 @@ mod tests {
 
     #[test]
     fn test_is_url_allowed() {
-        let executor = BrowserExecutor::new(vec!["example.com".to_string(), "github.com".to_string()]);
+        let executor =
+            BrowserExecutor::new(vec!["example.com".to_string(), "github.com".to_string()]);
 
         assert!(executor.is_url_allowed("https://example.com"));
         assert!(executor.is_url_allowed("https://www.example.com"));
@@ -390,5 +438,25 @@ mod tests {
     fn test_empty_allowlist_allows_all() {
         let executor = BrowserExecutor::new(vec![]);
         assert!(executor.is_url_allowed("https://any-domain.com"));
+    }
+
+    #[test]
+    fn test_js_string_escapes_injection() {
+        // Plain value → quoted literal.
+        assert_eq!(js_string("#id"), "\"#id\"");
+        // Single quote is preserved inside a double-quoted literal (no breakout).
+        assert_eq!(js_string("a'b"), "\"a'b\"");
+        // Double quote and backslash are escaped.
+        assert_eq!(js_string("a\"b"), "\"a\\\"b\"");
+        assert_eq!(js_string("a\\b"), "\"a\\\\b\"");
+        // A classic breakout attempt stays inside the literal.
+        let malicious = "'); alert('xss'); ('";
+        let lit = js_string(malicious);
+        assert!(lit.starts_with('"') && lit.ends_with('"'));
+        // Round-trips back to the exact original via JSON parsing (valid JS literal).
+        let parsed: String = serde_json::from_str(&lit).unwrap();
+        assert_eq!(parsed, malicious);
+        // Newlines are escaped, not literal (which would break the JS line).
+        assert!(!js_string("a\nb").contains('\n'));
     }
 }

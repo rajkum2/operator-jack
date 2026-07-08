@@ -169,7 +169,7 @@ mod tests {
     fn test_discover_skills() {
         let temp_dir = TempDir::new().unwrap();
         let skill_path = temp_dir.path().join("test-skill.yaml");
-        
+
         let mut file = std::fs::File::create(&skill_path).unwrap();
         file.write_all(
             b"schema_version: 1\nname: test-skill\nsteps:\n  - id: s1\n    type: sys.open_app\n    params:\n      app: Notes"
@@ -186,7 +186,7 @@ mod tests {
     fn test_get_skill() {
         let temp_dir = TempDir::new().unwrap();
         let skill_path = temp_dir.path().join("test.yaml");
-        
+
         let mut file = std::fs::File::create(&skill_path).unwrap();
         file.write_all(b"schema_version: 1\nname: my-skill\nsteps:\n  - id: s1\n    type: sys.open_app\n    params:\n      app: Notes").unwrap();
 

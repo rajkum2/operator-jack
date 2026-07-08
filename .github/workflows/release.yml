@@ -21,7 +21,7 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Run tests
-        run: cargo test
+        run: cargo test --locked
 
       - name: Build universal binaries
         run: make universal
@@ -38,3 +38,35 @@ jobs:
           files: |
             dist/operator-jack-*.tar.gz
             dist/operator-jack-*.tar.gz.sha256
+
+      # Update the Homebrew tap so `brew install rajkum2/tap/operator-jack`
+      # tracks the release. Requires a HOMEBREW_TAP_TOKEN secret (a PAT with
+      # push access to rajkum2/homebrew-tap); if it is not set, this step
+      # skips cleanly rather than failing the release.
+      - name: Update Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAP_TOKEN:-}" ]; then
+            echo "HOMEBREW_TAP_TOKEN not set — skipping tap update."
+            exit 0
+          fi
+          VER="${VERSION#v}"
+          TARBALL="dist/operator-jack-${VERSION}-macos-universal.tar.gz"
+          SHA=$(shasum -a 256 "$TARBALL" | awk '{print $1}')
+          URL="https://github.com/rajkum2/operator-jack/releases/download/${VERSION}/operator-jack-${VERSION}-macos-universal.tar.gz"
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/rajkum2/homebrew-tap.git" tap
+          FORMULA=$(find tap -name 'operator-jack.rb' | head -1)
+          if [ -z "$FORMULA" ]; then
+            echo "operator-jack.rb not found in tap — skipping." && exit 0
+          fi
+          sed -i '' -E "s|url \".*\"|url \"${URL}\"|" "$FORMULA"
+          sed -i '' -E "s|sha256 \".*\"|sha256 \"${SHA}\"|" "$FORMULA"
+          sed -i '' -E "s|version \".*\"|version \"${VER}\"|" "$FORMULA"
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -am "operator-jack ${VERSION}"
+          git push

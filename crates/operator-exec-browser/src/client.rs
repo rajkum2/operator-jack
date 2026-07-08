@@ -128,9 +128,9 @@ impl BrowserClient {
 
         // Send the request
         let msg = Message::Text(serde_json::to_string(&request)?);
-        self.sender.send(msg).map_err(|_| {
-            BrowserError::ConnectionError("Failed to send message".to_string())
-        })?;
+        self.sender
+            .send(msg)
+            .map_err(|_| BrowserError::ConnectionError("Failed to send message".to_string()))?;
 
         debug!("Sent CDP request {}: {}", id, request.method);
 
@@ -279,12 +279,7 @@ pub async fn discover_chrome_ws_url(port: u16) -> Result<String, BrowserError> {
 
     // Get list of targets
     let targets_url = format!("http://127.0.0.1:{}/json/list", port);
-    let targets: Vec<DebuggerTarget> = client
-        .get(&targets_url)
-        .send()
-        .await?
-        .json()
-        .await?;
+    let targets: Vec<DebuggerTarget> = client.get(&targets_url).send().await?.json().await?;
 
     // Find the first page target
     for target in targets {
@@ -327,9 +322,9 @@ pub async fn launch_chrome(port: u16) -> Result<tokio::process::Child, BrowserEr
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
-    let child = cmd.spawn().map_err(|e| {
-        BrowserError::ConnectionError(format!("Failed to launch Chrome: {}", e))
-    })?;
+    let child = cmd
+        .spawn()
+        .map_err(|e| BrowserError::ConnectionError(format!("Failed to launch Chrome: {}", e)))?;
 
     // Wait a moment for Chrome to start
     tokio::time::sleep(Duration::from_millis(500)).await;

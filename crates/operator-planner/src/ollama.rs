@@ -31,24 +31,7 @@ impl OllamaProvider {
     }
 
     fn extract_plan_from_response(&self, text: &str) -> Result<Plan, PlannerError> {
-        // Try to extract JSON from markdown code blocks
-        let json_str = if let Some(start) = text.find("```json") {
-            let after_start = &text[start + 7..];
-            if let Some(end) = after_start.find("```") {
-                after_start[..end].trim()
-            } else {
-                text.trim()
-            }
-        } else if let Some(start) = text.find("```") {
-            let after_start = &text[start + 3..];
-            if let Some(end) = after_start.find("```") {
-                after_start[..end].trim()
-            } else {
-                text.trim()
-            }
-        } else {
-            text.trim()
-        };
+        let json_str = crate::prompt::extract_json_from_response(text);
 
         let plan: Plan = serde_json::from_str(json_str)
             .map_err(|e| PlannerError::ParseError(format!("Invalid JSON: {}", e)))?;
@@ -64,6 +47,27 @@ impl OllamaProvider {
             .timeout(std::time::Duration::from_secs(5))
             .call()
             .is_ok()
+    }
+
+    /// Returns true only if the daemon is reachable AND the configured model has
+    /// been pulled — i.e. `do` will actually run, rather than failing at request
+    /// time with "model not found". Ollama tags models as `name:tag`, so a bare
+    /// configured name (`llama3.2`) matches a pulled `llama3.2:latest`.
+    pub fn is_ready(&self) -> bool {
+        match self.list_models() {
+            Ok(models) => {
+                let want = self.model();
+                // Ollama resolves a bare name to `name:latest`, so a pulled
+                // `llama3.2:3b` does NOT satisfy a request for bare `llama3.2`.
+                let resolved = if want.contains(':') {
+                    want.to_string()
+                } else {
+                    format!("{want}:latest")
+                };
+                models.iter().any(|m| m == want || m == &resolved)
+            }
+            Err(_) => false,
+        }
     }
 
     /// Lists available models from the Ollama server.

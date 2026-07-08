@@ -34,7 +34,7 @@ steps:
     type: ui.select_menu
     params:
       app: Notes
-      path: [File, New Note]
+      menu_path: [File, New Note]
   
   - id: wait_for_editor
     type: ui.wait_for
@@ -56,7 +56,7 @@ steps:
     type: ui.key_press
     params:
       app: Notes
-      keys: [Return, Return]
+      key: Return
 
   - id: type_body
     type: ui.type_text
