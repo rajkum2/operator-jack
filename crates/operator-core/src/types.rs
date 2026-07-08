@@ -65,6 +65,10 @@ pub enum StepType {
     UiListWindows,
     #[serde(rename = "ui.focus_window")]
     UiFocusWindow,
+    #[serde(rename = "ui.snapshot")]
+    UiSnapshot,
+    #[serde(rename = "ui.screenshot")]
+    UiScreenshot,
 
     // Browser lane (M5)
     #[serde(rename = "browser.navigate")]
@@ -117,7 +121,9 @@ impl StepType {
             | StepType::UiWaitFor
             | StepType::UiSelectMenu
             | StepType::UiListWindows
-            | StepType::UiFocusWindow => "ui",
+            | StepType::UiFocusWindow
+            | StepType::UiSnapshot
+            | StepType::UiScreenshot => "ui",
 
             // Browser lane
             StepType::BrowserNavigate
@@ -161,6 +167,8 @@ impl StepType {
             StepType::UiSelectMenu => "ui.select_menu",
             StepType::UiListWindows => "ui.list_windows",
             StepType::UiFocusWindow => "ui.focus_window",
+            StepType::UiSnapshot => "ui.snapshot",
+            StepType::UiScreenshot => "ui.screenshot",
             // Browser lane
             StepType::BrowserNavigate => "browser.navigate",
             StepType::BrowserClick => "browser.click",
@@ -212,6 +220,8 @@ impl std::str::FromStr for StepType {
             "ui.select_menu" => Ok(StepType::UiSelectMenu),
             "ui.list_windows" => Ok(StepType::UiListWindows),
             "ui.focus_window" => Ok(StepType::UiFocusWindow),
+            "ui.snapshot" => Ok(StepType::UiSnapshot),
+            "ui.screenshot" => Ok(StepType::UiScreenshot),
             // Browser lane
             "browser.navigate" => Ok(StepType::BrowserNavigate),
             "browser.click" => Ok(StepType::BrowserClick),

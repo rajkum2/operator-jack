@@ -8,7 +8,7 @@ let maxLineBytes = 1_048_576  // 1 MiB
 
 /// Helper version reported in the ui.ping handshake. Keep in sync with the Rust
 /// workspace version in Cargo.toml ([workspace.package] version).
-let helperVersion = "0.7.1"
+let helperVersion = "0.8.0"
 
 // ---------------------------------------------------------------------------
 // Register methods
@@ -30,6 +30,9 @@ dispatcher.register("ui.keyPress", handler: handleKeyPress)
 dispatcher.register("ui.selectMenu", handler: handleSelectMenu)
 dispatcher.register("ui.setValue", handler: handleSetValue)
 dispatcher.register("ui.inspect", handler: handleInspect)
+dispatcher.register("ui.snapshot", handler: handleSnapshot)
+dispatcher.register("ui.screenshot", handler: handleScreenshot)
+dispatcher.register("ui.checkScreenRecordingPermission", handler: handleCheckScreenRecording)
 
 // ---------------------------------------------------------------------------
 // JSON encoder/decoder

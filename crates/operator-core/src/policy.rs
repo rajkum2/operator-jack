@@ -25,7 +25,9 @@ pub fn risk_level(step_type: &StepType) -> RiskLevel {
         | StepType::UiReadText
         | StepType::UiWaitFor
         | StepType::UiCheckAccessibilityPermission
-        | StepType::UiListWindows => RiskLevel::Low,
+        | StepType::UiListWindows
+        | StepType::UiSnapshot
+        | StepType::UiScreenshot => RiskLevel::Low,
 
         // High risk -- filesystem mutations and arbitrary command execution
         StepType::SysWriteFile

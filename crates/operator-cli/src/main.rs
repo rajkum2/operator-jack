@@ -362,22 +362,26 @@ fn cmd_doctor(cli: &Cli) -> Result<()> {
     let helper_found = helper_path.is_some();
     let helper_status = if helper_found { "OK" } else { "NOT FOUND" };
 
-    // 4. Accessibility permission (requires helper)
-    let accessibility_status = if let Some(ref hp) = helper_path {
+    // 4. Accessibility + Screen Recording permissions (require helper)
+    let (accessibility_status, screen_recording_status) = if let Some(ref hp) = helper_path {
         let mut client =
             operator_ipc::client::HelperClient::new(Some(hp.to_string_lossy().to_string()));
         match client.connect() {
             Ok(()) => {
-                let result = client.send(
+                let ax = client.send(
                     "ui.check_accessibility_permission",
                     serde_json::json!({"prompt": true}),
                 );
+                let sr = client.send(
+                    "ui.check_screen_recording_permission",
+                    serde_json::json!({}),
+                );
                 client.disconnect();
-                match result {
+                let ax_status = match ax {
                     Ok(val) => {
                         if val
                             .get("trusted")
-                            .and_then(|v: &serde_json::Value| v.as_bool())
+                            .and_then(|v| v.as_bool())
                             .unwrap_or(false)
                         {
                             "GRANTED"
@@ -389,15 +393,33 @@ fn cmd_doctor(cli: &Cli) -> Result<()> {
                         tracing::warn!("accessibility check failed: {}", e);
                         "CHECK FAILED"
                     }
-                }
+                };
+                let sr_status = match sr {
+                    Ok(val) => {
+                        if val
+                            .get("granted")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                        {
+                            "GRANTED"
+                        } else {
+                            "NOT GRANTED"
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("screen recording check failed: {}", e);
+                        "CHECK FAILED"
+                    }
+                };
+                (ax_status, sr_status)
             }
             Err(e) => {
                 tracing::warn!("helper connection failed: {}", e);
-                "CHECK FAILED"
+                ("CHECK FAILED", "CHECK FAILED")
             }
         }
     } else {
-        "SKIPPED (helper not found)"
+        ("SKIPPED (helper not found)", "SKIPPED (helper not found)")
     };
 
     // 5. Planner providers (readiness of the `do` natural-language command).
@@ -431,6 +453,11 @@ fn cmd_doctor(cli: &Cli) -> Result<()> {
                 "NOT GRANTED" => "not_granted",
                 _ => "skipped",
             },
+            "screen_recording": match screen_recording_status {
+                "GRANTED" => "granted",
+                "NOT GRANTED" => "not_granted",
+                _ => "skipped",
+            },
             "db_path": db_path.display().to_string(),
             "log_dir_path": log_dir.display().to_string(),
             "first_run": is_first_run,
@@ -458,6 +485,7 @@ fn cmd_doctor(cli: &Cli) -> Result<()> {
         println!("Log dir:       {}", log_status);
         println!("Helper:        {}", helper_status);
         println!("Accessibility: {}", accessibility_status);
+        println!("Screen Rec.:   {}", screen_recording_status);
         println!(
             "Planner (do):  {}",
             if do_ready { "READY" } else { "NOT CONFIGURED" }

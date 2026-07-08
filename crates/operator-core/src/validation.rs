@@ -194,6 +194,9 @@ pub fn validate_step_params(
             require_string_param(params, "app")?;
             require_object_param(params, "window")
         }
+        StepType::UiSnapshot => require_string_param(params, "app"),
+        // ui.screenshot: `app` is optional (omit to capture the main display).
+        StepType::UiScreenshot => Ok(()),
         // Browser lane
         StepType::BrowserNavigate => require_string_param(params, "url"),
         StepType::BrowserClick => require_string_param(params, "selector"),
@@ -361,6 +364,31 @@ mod tests {
 
         let result = validate_step_params(&StepType::UiListWindows, &json!({"app": "Finder"}));
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_snapshot_and_screenshot_step_types() {
+        // ui.snapshot requires app; ui.screenshot's app is optional.
+        assert!(validate_step_params(&StepType::UiSnapshot, &json!({})).is_err());
+        assert!(validate_step_params(&StepType::UiSnapshot, &json!({"app": "Calculator"})).is_ok());
+        assert!(validate_step_params(&StepType::UiScreenshot, &json!({})).is_ok());
+        assert!(
+            validate_step_params(&StepType::UiScreenshot, &json!({"app": "Calculator"})).is_ok()
+        );
+
+        // Round-trip through the string form and confirm they are ui-lane, Low risk.
+        for (s, st) in [
+            ("ui.snapshot", StepType::UiSnapshot),
+            ("ui.screenshot", StepType::UiScreenshot),
+        ] {
+            assert_eq!(st.as_str(), s);
+            assert_eq!(s.parse::<StepType>().unwrap(), st);
+            assert_eq!(st.lane(), "ui");
+            assert_eq!(
+                crate::policy::risk_level(&st),
+                crate::policy::RiskLevel::Low
+            );
+        }
     }
 
     #[test]

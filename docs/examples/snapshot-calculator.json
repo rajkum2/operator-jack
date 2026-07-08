@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "name": "Calculator snapshot",
+  "description": "Opens Calculator and captures a compact AX snapshot with actionable element refs (M7 observation API)",
+  "mode": "unsafe",
+  "allow_apps": ["Calculator"],
+  "steps": [
+    {
+      "id": "open_calc",
+      "type": "sys.open_app",
+      "params": { "app": "Calculator" }
+    },
+    {
+      "id": "wait_calc",
+      "type": "ui.wait_for",
+      "params": {
+        "app": "Calculator",
+        "selector": { "role": "AXWindow" },
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "id": "snapshot",
+      "type": "ui.snapshot",
+      "params": {
+        "app": "Calculator",
+        "interactive_only": true
+      }
+    }
+  ]
+}

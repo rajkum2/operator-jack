@@ -97,12 +97,12 @@ final class SelectorParamsTests: XCTestCase {
         XCTAssertFalse(SelectorParams().hasMatchableCriteria)
     }
 
-    func testHasMatchableCriteriaFalseForPathOnly() {
-        // `path` is parsed but not a matcher yet — a path-only selector must not
-        // count as matchable (it would otherwise match every element).
+    func testHasMatchableCriteriaTrueForPath() {
+        // As of M7, `path` is a real matcher (suffix of the computed traversal
+        // path), so a path-only selector is matchable.
         var s = SelectorParams()
         s.path = "AXWindow/AXButton[0]"
-        XCTAssertFalse(s.hasMatchableCriteria)
+        XCTAssertTrue(s.hasMatchableCriteria)
     }
 
     func testHasMatchableCriteriaFalseForIndexOrWindowOnly() {

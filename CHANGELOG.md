@@ -6,7 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-See [`MASTER_PLAN.md`](MASTER_PLAN.md) for the authoritative M7-M15 roadmap (perception, safety envelope, MCP server, native agent loop, and beyond).
+See [`MASTER_PLAN.md`](MASTER_PLAN.md) for the authoritative M7-M15 roadmap (safety envelope, MCP server, native agent loop, and beyond).
+
+## [0.8.0] - 2026-07-08
+
+M7 — Perception / Observation API. Models can now see the screen.
+
+### Added
+- `ui.snapshot` observation step — compact indented AX-tree serialization (one line per element: role, name, value, enabled/focused flags) with actionable elements tagged as short refs (`e1`, `e2`…); params `app`/`window`/`max_depth`/`interactive_only`; returns snapshot text, `ref_count`, `truncated`, and `token_estimate`
+- `ui.screenshot` step — downscaled PNG of a window or display written to disk (`screencapture` + `sips`); returns the file path plus width/height, never image bytes
+- Snapshot refs are usable as `element_ref` in `ui.click`, `ui.read_text`, and `ui.set_value`
+- Chromium/Electron accessibility enablement — `AXManualAccessibility` + a messaging timeout on the app element, plus a first-observation "settle" for the lazily-built a11y tree (Slack/Chrome web content is now visible to the helper)
+- `path` selector matching — suffix match on the computed traversal path (previously parsed but rejected when used alone)
+- `doctor` now reports Screen Recording permission status (alongside Accessibility)
+- Three new Swift helper handlers (registry 15 → 18): `ui.snapshot`, `ui.screenshot`, `ui.checkScreenRecordingPermission`
+- SPEC_FREEZE_V0.7.md (M7 observation API spec)
+- `docs/examples/snapshot-calculator.json`
+
+### Note
+- `ui.screenshot` requires Screen Recording permission (granted in System Settings). Without it the step fails cleanly with a helpful message; `doctor` surfaces the status.
 
 ## [0.7.1] - 2026-07-08
 

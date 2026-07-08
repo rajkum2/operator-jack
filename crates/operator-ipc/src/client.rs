@@ -314,6 +314,7 @@ impl Drop for HelperClient {
 fn translate_method_name(step_type_str: &str) -> String {
     match step_type_str {
         "ui.check_accessibility_permission" => "ui.checkAccessibilityPermission".to_string(),
+        "ui.check_screen_recording_permission" => "ui.checkScreenRecordingPermission".to_string(),
         "ui.list_apps" => "ui.listApps".to_string(),
         "ui.focus_app" => "ui.focusApp".to_string(),
         "ui.set_value" => "ui.setValue".to_string(),
@@ -324,8 +325,10 @@ fn translate_method_name(step_type_str: &str) -> String {
         "ui.select_menu" => "ui.selectMenu".to_string(),
         "ui.list_windows" => "ui.listWindows".to_string(),
         "ui.focus_window" => "ui.focusWindow".to_string(),
-        // These are already the same in both conventions.
-        "ui.find" | "ui.click" | "ui.ping" => step_type_str.to_string(),
+        // These are already the same in both conventions (single-word verbs).
+        "ui.find" | "ui.click" | "ui.ping" | "ui.snapshot" | "ui.screenshot" => {
+            step_type_str.to_string()
+        }
         // Unknown method — pass through as-is.
         other => other.to_string(),
     }

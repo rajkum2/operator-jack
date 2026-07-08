@@ -9,7 +9,7 @@
 ## Quick Start (For New Session)
 
 1. Read this file completely
-2. Read the roadmap: `MASTER_PLAN.md` (authoritative, M7-M15). Newest specs: `SPEC_FREEZE_V0.6.md` (M5 browser) + `SPEC_FREEZE_V0.5.md` (M6 skills, retroactive); base contract: `SPEC_FREEZE_V0.2.md`
+2. Read the roadmap: `MASTER_PLAN.md` (authoritative, M7-M15). Newest spec: `SPEC_FREEZE_V0.7.md` (M7 perception); prior: `SPEC_FREEZE_V0.6.md` (M5 browser), `SPEC_FREEZE_V0.5.md` (M6 skills, retroactive); base contract: `SPEC_FREEZE_V0.2.md`
 3. Check `VERSION_LOG` below for what changed last
 4. Check `CURRENT_STATE` below for what's built vs pending
 5. Check `NEXT_ACTIONS` for what to do next
@@ -34,6 +34,7 @@
 |------|---------|
 | `PROJECT_CONTEXT.md` | THIS FILE — resume context, version log, state tracker |
 | `MASTER_PLAN.md` | Authoritative forward roadmap (M7-M15) |
+| `SPEC_FREEZE_V0.7.md` | M7 spec — observation API (ui.snapshot/ui.screenshot, refs, Electron AX, path selectors) |
 | `SPEC_FREEZE_V0.6.md` | M5 spec delta — browser executor / CDP |
 | `SPEC_FREEZE_V0.5.md` | M6 spec — skills system (written retroactively) |
 | `SPEC_FREEZE_V0.4.md` | M4 spec delta — LLM planner + `do` command |
@@ -77,6 +78,18 @@
 ---
 
 ## VERSION_LOG
+
+### v0.8.0 — 2026-07-08
+**Status:** M7 complete. Perception / Observation API — models can now see the screen (AX-tree snapshots + screenshots). 129 Rust tests + 10 Swift tests pass.
+**Changes:**
+1. `ui.snapshot` step + IPC method + Swift handler (`Methods/Snapshot.swift` → `handleSnapshot`): compact indented AX-tree serialization (one line per element: role, name, value, enabled/focused flags), actionable elements tagged with short refs (`e1`, `e2`…) backed by `ElementRefStore` and invalidated per-snapshot; params `app`/`window`/`max_depth`/`interactive_only`; returns snapshot text + `ref_count` + `truncated` + `token_estimate`. Verified snapshot→ref-click on Calculator (refs e2/e13/e16/e14/e20 → display reads 3)
+2. `ui.screenshot` step + Swift handler (`Methods/Screenshot.swift` → `handleScreenshot`): downscaled PNG of a window/display written to disk via `screencapture` + `sips`; returns path + width + height, never image bytes; requires Screen Recording permission (fails cleanly with a helpful message when not granted)
+3. `ui.checkScreenRecordingPermission` handler (`Methods/Screenshot.swift` → `handleCheckScreenRecording`); Swift handler registry grows 15 → 18
+4. Snapshot refs are accepted as `element_ref` by `ui.click`/`ui.read_text`/`ui.set_value` (falls back to selector re-resolution when stale)
+5. Chromium/Electron accessibility enablement: `axAppElement` sets `AXManualAccessibility` + a messaging timeout; a first-observation "settle" waits for the lazily-built a11y tree (Slack 1719 tokens, Chrome 399 tokens, Calculator 327 tokens all surface real content)
+6. Selector `path` is now a real matcher (suffix of the computed traversal path) — reverses Phase B's path-only rejection; `any_of` works in find/waitFor
+7. `doctor` now reports Screen Recording permission status (alongside Accessibility) and provider readiness
+8. Created `SPEC_FREEZE_V0.7.md` (M7 observation API spec); added `docs/examples/snapshot-calculator.json`
 
 ### v0.7.1 — 2026-07-08
 **Status:** Phase B complete. Stabilization & reconciliation — no new features; audit fixes, Swift helper correctness, shipped-code security fixes, docs. 128 Rust tests + 9 Swift tests pass.
@@ -292,7 +305,12 @@
 - [x] Swift test target (macos-helper/Tests/OperatorMacOSHelperTests): 9 tests
 - [x] `make check-examples` harness (validate examples + dry-run skills), wired into CI
 - [x] MASTER_PLAN.md — authoritative forward roadmap (M7-M15)
-- [x] 128 Rust tests + 9 Swift tests passing (v0.7.1)
+- [x] SPEC_FREEZE_V0.7.md (M7 observation API spec)
+- [x] M7 perception: `ui.snapshot` (compact AX serialization + actionable refs) and `ui.screenshot` (downscaled PNG to disk) step types + Swift handlers; snapshot refs accepted as `element_ref` by click/read_text/set_value
+- [x] Swift helper now has 18 handlers (added snapshot, screenshot, checkScreenRecordingPermission)
+- [x] Chromium/Electron AX enablement (AXManualAccessibility + messaging timeout + first-read settle); `path` selector matching; `doctor` Screen Recording permission check
+- [x] docs/examples/snapshot-calculator.json
+- [x] 129 Rust tests + 10 Swift tests passing (v0.8.0)
 
 ### Milestone Status
 
@@ -308,7 +326,8 @@
 | M5 | DONE | Browser executor (CDP) — `browser` CLI subcommands only; plan-lane wiring is M12 |
 | M6 | DONE | Skills system (manifest → plan expansion; skill list/validate/run) |
 | Phase B | DONE | Stabilization (v0.7.1): audit/security fixes, Swift correctness + test target, docs reconciliation |
-| M7-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md — M7 perception, M8 safety envelope, M9 MCP, M10 agent loop, M11 long-horizon, M12 browser wiring, M13 control flow, M14 AppleScript/OCR, M15 trust |
+| M7 | DONE | Perception / Observation API: ui.snapshot (compact AX + refs), ui.screenshot, Electron/Chromium AX enablement, path selectors, doctor Screen Recording check |
+| M8-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md — M8 safety envelope (next), M9 MCP, M10 agent loop, M11 long-horizon, M12 browser wiring, M13 control flow, M14 AppleScript/OCR, M15 trust |
 
 ---
 
@@ -316,10 +335,9 @@
 
 **Immediate next steps (in order) — see MASTER_PLAN.md for full detail:**
 
-1. **M7 — Perception: the Observation API (v0.8.0)** — give models eyes: `ui.snapshot` (compact AX-tree serialization with element refs), `ui.screenshot` (ScreenCaptureKit), Electron/Chromium AX enablement, refs accepted by click/read_text/set_value.
-2. **M8 — Safety Envelope (v0.9.0)** — task-scoped grants, run budgets, Keychain secret store, always-escalate classifier. Can proceed in parallel with M7.
+1. **M8 — Safety Envelope (v0.9.0)** — task-scoped grants, run budgets, Keychain secret store, always-escalate classifier. Was the parallel track to M7; now the critical path — it unblocks M9 (MCP server) and M10 (native agent loop).
 
-**MASTER_PLAN.md is the authoritative roadmap for M7-M15.** M0-M6 plus Phase B (v0.7.1) are complete.
+**MASTER_PLAN.md is the authoritative roadmap for M7-M15.** M0-M7 plus Phase B (v0.7.1) are complete.
 
 ---
 
@@ -368,4 +386,4 @@ When multiple AX elements match and no `index` is given: interactive mode prompt
 
 ---
 
-*Last updated: 2026-07-08 — Phase B COMPLETE (v0.7.1). M0-M6 done: system + UI + browser (CDP) lanes, LLM planner (Kimi/OpenAI/Anthropic/Ollama), skills system. Phase B stabilization: audit/security fixes, Swift helper correctness + new Swift test target, docs reconciliation. 128 Rust tests + 9 Swift tests passing. Next: M7 (Perception) per MASTER_PLAN.md.*
+*Last updated: 2026-07-08 — M7 COMPLETE (v0.8.0). Perception / Observation API: ui.snapshot (compact AX serialization + actionable refs), ui.screenshot (downscaled PNG to disk, Screen Recording gated), Chromium/Electron AX enablement + first-read settle, path selector matching, doctor Screen Recording check. M0-M7 plus Phase B done. 129 Rust tests + 10 Swift tests passing. Next: M8 (Safety Envelope) per MASTER_PLAN.md.*
