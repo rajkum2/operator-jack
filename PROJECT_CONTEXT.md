@@ -80,6 +80,15 @@
 
 ## VERSION_LOG
 
+### v0.9.1 — 2026-07-08
+**Status:** M8 COMPLETE. Finished the last deferred sub-feature: the Keychain secret store.
+**Changes:**
+1. `operator-core::secrets` — keychain get/set/delete/list (security-framework) under the `operator-jack` service, with a name index for `list`.
+2. `{{secret:name}}` references resolved at execution time in the engine, for DISPATCH only; the audited params (`input_json`), JSONL logs, and saved plan keep the reference form.
+3. `operator-jack secret set|list|rm` CLI (value from stdin or `--value`; never echoes values).
+4. Verified live: a plan writing `{{secret:X}}` produced the resolved value on disk while the store/logs showed only the reference — no leak in SQLite or JSONL.
+5. 142 Rust tests + 10 Swift tests.
+
 ### v0.9.0 — 2026-07-08
 **Status:** M8 core complete. The Safety Envelope — a grantable, bounded, auditable policy model so a model can drive the executors without constant prompts or unbounded blast radius. 139 Rust tests + 10 Swift tests pass. (Keychain secret store deferred — see item 7.)
 **Changes:**
@@ -331,7 +340,7 @@
 - [x] M8 exit codes: policy/grant/escalation denial → 3; `Partial` (budget) → 7
 - [x] docs/examples/grants-scoped-write.json (fs_write grant + budget)
 - [x] 139 Rust tests + 10 Swift tests passing (v0.9.0)
-- [ ] DEFERRED (0.9.x / M8.5): Keychain secret store + `{{secret:name}}` injection (secure-field refusal done; credential-injection half pending — consumers M9/M10 not built yet)
+- [x] Keychain secret store + `{{secret:name}}` injection (v0.9.1) — `secret set/list/rm`, resolved at execution time, never persisted (verified no-leak)
 
 ### Milestone Status
 
@@ -348,7 +357,7 @@
 | M6 | DONE | Skills system (manifest → plan expansion; skill list/validate/run) |
 | Phase B | DONE | Stabilization (v0.7.1): audit/security fixes, Swift correctness + test target, docs reconciliation |
 | M7 | DONE | Perception / Observation API: ui.snapshot (compact AX + refs), ui.screenshot, Electron/Chromium AX enablement, path selectors, doctor Screen Recording check |
-| M8 | DONE* | Safety envelope: task-scoped grants (fs/exec/domains), run budgets + `Partial` status, always-escalate classifier, secure-field refusal, redaction hardening, exit code 3. *Keychain secret store (`{{secret:}}`) deferred to a 0.9.x follow-on (M8.5) |
+| M8 | DONE | Safety envelope: task-scoped grants (fs/exec/domains), run budgets + `Partial` status, always-escalate classifier, secure-field refusal, redaction hardening, exit code 3, Keychain secret store (`{{secret:name}}` injection) |
 | M9-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md — M9 MCP server (next), M10 agent loop, M11 long-horizon, M12 browser wiring, M13 control flow, M14 AppleScript/OCR, M15 trust |
 
 ---
@@ -357,10 +366,10 @@
 
 **Immediate next steps (in order) — see MASTER_PLAN.md for full detail:**
 
-1. **M8.5 — Keychain secret store (0.9.x follow-on)** — finish the deferred half of M8: `operator-jack secret set/list/rm` (security-framework) + `{{secret:name}}` refs resolved only at execution time, tainted/force-redacted in results, and injected into the target field by the helper without ever entering a model prompt or the store. The secure-field refusal (the safety half) already shipped in v0.9.0.
-2. **M9 — MCP Server Mode (v0.10.0)** — expose Operator Jack as an MCP server (`operator-jack mcp serve`) so any MCP client drives the gated executors; owns the RunSession refactor. First shippable autonomy. Depends on M7 + M8 (both done).
+1. **M9 — MCP Server Mode (v0.10.0)** — expose Operator Jack as an MCP server (`operator-jack mcp serve`) so any MCP client drives the gated executors; owns the RunSession refactor (extract single-step gated execution from `execute_plan`). First shippable autonomy. Depends on M7 + M8 (both done).
+2. **M10 — Native agent loop (v0.11.0)** — observe→propose→execute→re-observe, consuming M9's RunSession + a multi-turn/tool-calling provider layer.
 
-**MASTER_PLAN.md is the authoritative roadmap for M7-M15.** M0-M8 core plus Phase B (v0.7.1) are complete (M8.5 Keychain secrets pending).
+**MASTER_PLAN.md is the authoritative roadmap for M7-M15.** M0-M8 plus Phase B (v0.7.1) are complete. M9 is next.
 
 ---
 
@@ -409,4 +418,4 @@ When multiple AX elements match and no `index` is given: interactive mode prompt
 
 ---
 
-*Last updated: 2026-07-08 — M8 CORE COMPLETE (v0.9.0). The Safety Envelope: task-scoped grants (fs/exec/domains), run budgets + new `Partial` terminal status, always-escalate classifier (sudo / rm -rf / pipe-to-shell, bulk-delete > 25, send/purchase in messaging apps, hard secure-field typing refusal), redaction hardening (plan_json at rest, looks-like-path exemption), policy-denial exit code 3. M0-M8 core plus Phase B done. 139 Rust tests + 10 Swift tests passing. Keychain secret store + {{secret:}} injection deferred to a 0.9.x follow-on (M8.5). Next: M8.5 then M9 (MCP server) per MASTER_PLAN.md.*
+*Last updated: 2026-07-08 — M8 COMPLETE (v0.9.1). The Safety Envelope: task-scoped grants (fs/exec/domains), run budgets + new `Partial` terminal status, always-escalate classifier (sudo / rm -rf / pipe-to-shell, bulk-delete > 25, send/purchase in messaging apps, hard secure-field typing refusal), redaction hardening (plan_json at rest, looks-like-path exemption), policy-denial exit code 3, and the Keychain secret store (`{{secret:name}}` injection resolved only at execution time, never persisted — verified no-leak). M0-M8 plus Phase B done. 142 Rust tests + 10 Swift tests passing. Next: M9 (MCP server mode) per MASTER_PLAN.md.*

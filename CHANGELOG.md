@@ -6,7 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-See [`MASTER_PLAN.md`](MASTER_PLAN.md) for the authoritative M7-M15 roadmap (safety envelope, MCP server, native agent loop, and beyond).
+See [`MASTER_PLAN.md`](MASTER_PLAN.md) for the authoritative roadmap. Next: M9 (MCP server mode).
+
+## [0.9.1] - 2026-07-08
+
+Completes M8 (the last deferred sub-feature).
+
+### Added
+- Keychain secret store: `operator-jack secret set|list|rm`, storing generic
+  passwords under the `operator-jack` service in the macOS login keychain.
+- `{{secret:name}}` references in any plan/skill param, resolved to the keychain
+  value at execution time — only for dispatch. The audited params (`input_json`),
+  JSONL logs, and the saved plan keep the reference form, so the literal secret
+  never enters the store or logs (verified: end-to-end injection with no leak in
+  SQLite or JSONL).
 
 ## [0.9.0] - 2026-07-08
 

@@ -164,6 +164,31 @@ enum Commands {
         #[command(subcommand)]
         action: BrowserAction,
     },
+
+    /// Manage keychain secrets referenced in plans as `{{secret:name}}` (M8)
+    Secret {
+        #[command(subcommand)]
+        action: SecretAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum SecretAction {
+    /// Store (or update) a secret. The value is read from stdin (or --value).
+    Set {
+        /// Secret name (referenced in plans as `{{secret:name}}`).
+        name: String,
+        /// Value (omit to read from stdin, which avoids shell history).
+        #[arg(long)]
+        value: Option<String>,
+    },
+    /// List stored secret names (never their values).
+    List,
+    /// Remove a secret.
+    Rm {
+        /// Secret name.
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -333,7 +358,72 @@ fn main() -> Result<()> {
                 port,
             } => cmd_browser_screenshot(&cli, output, *full_page, *port),
         },
+        Commands::Secret { ref action } => match action {
+            SecretAction::Set { name, value } => cmd_secret_set(&cli, name, value.as_deref()),
+            SecretAction::List => cmd_secret_list(&cli),
+            SecretAction::Rm { name } => cmd_secret_rm(&cli, name),
+        },
     }
+}
+
+// ---------------------------------------------------------------------------
+// cmd_secret_* — keychain secret management (M8)
+// ---------------------------------------------------------------------------
+
+/// Stores a secret. Reads the value from `--value` or stdin (so it stays out of
+/// shell history). Never echoes the value.
+fn cmd_secret_set(cli: &Cli, name: &str, value: Option<&str>) -> Result<()> {
+    use std::io::{Read, Write};
+    let value = match value {
+        Some(v) => v.to_string(),
+        None => {
+            if atty_is_interactive() {
+                eprint!("Enter value for secret '{name}' (input hidden not guaranteed): ");
+                let _ = std::io::stderr().flush();
+            }
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .context("failed to read secret value from stdin")?;
+            buf.trim_end_matches(['\n', '\r']).to_string()
+        }
+    };
+    if value.is_empty() {
+        anyhow::bail!("refusing to store an empty secret value");
+    }
+    operator_core::secrets::set_secret(name, &value)
+        .map_err(|e| anyhow::anyhow!("failed to store secret: {e}"))?;
+    if !cli.quiet {
+        eprintln!("Stored secret '{name}' in the keychain. Reference it in plans as {{{{secret:{name}}}}}.");
+    }
+    Ok(())
+}
+
+fn cmd_secret_list(cli: &Cli) -> Result<()> {
+    let names = operator_core::secrets::list_secrets();
+    if cli.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "secrets": names }))?
+        );
+    } else if names.is_empty() {
+        println!("No secrets stored. Add one with: operator-jack secret set <name>");
+    } else {
+        println!("Stored secrets ({}):", names.len());
+        for n in &names {
+            println!("  - {n}");
+        }
+    }
+    Ok(())
+}
+
+fn cmd_secret_rm(cli: &Cli, name: &str) -> Result<()> {
+    operator_core::secrets::delete_secret(name)
+        .map_err(|e| anyhow::anyhow!("failed to remove secret: {e}"))?;
+    if !cli.quiet {
+        eprintln!("Removed secret '{name}'.");
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

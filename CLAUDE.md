@@ -21,7 +21,7 @@ export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 # Build Rust workspace
 cd /Users/kirankumaralugonda/operator-jack && cargo build
 
-# Run Rust tests (139 tests)
+# Run Rust tests (142 tests)
 cargo test
 
 # Build Swift helper and run Swift tests (10 tests)
@@ -109,7 +109,7 @@ operator-jack/
 - `path` is a real matcher: suffix match on the computed traversal path (implemented in M7; was rejected-when-alone in Phase B)
 
 ### Testing
-- Rust: `cargo test` — unit tests in each crate's source files (139 tests)
+- Rust: `cargo test` — unit tests in each crate's source files (142 tests)
 - Swift: `cd macos-helper && swift test` — XCTest target at `Tests/OperatorMacOSHelperTests/` (10 tests; selector parsing + criteria). AX-dependent behavior is covered by the live acceptance harness.
 - Acceptance: `make check-examples` validates every golden plan in `docs/examples/` and dry-run-expands every skill. **No example or skill ships without passing it.** Run a plan live via `operator-jack run --plan-file <path> --mode unsafe --yes`.
 
@@ -139,7 +139,7 @@ operator-jack/
 | M6 | DONE | Skills system (manifest → plan expansion; skill list/validate/run) |
 | Phase B | DONE | Stabilization (v0.7.1): audit fixes, Swift correctness, security fixes, docs |
 | M7 | DONE | Perception: ui.snapshot (compact AX + refs), ui.screenshot, Electron AX enablement, path selectors, doctor screen-recording check |
-| M8 | DONE* | Safety envelope: task-scoped grants (fs/exec/domains), run budgets + Partial status, always-escalate classifier, secure-field refusal, redaction hardening, exit code 3. *Keychain secret store ({{secret:}}) deferred to a 0.9.x follow-on |
+| M8 | DONE | Safety envelope: task-scoped grants (fs/exec/domains), run budgets + Partial status, always-escalate classifier, secure-field refusal, redaction hardening, exit code 3, Keychain secret store (`{{secret:name}}` injection, `secret` CLI) |
 | M9-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md (M9=MCP [next], M10=agent loop, M11=long-horizon, M12=browser wiring, M13=control flow, M14=AppleScript/OCR, M15=trust) |
 
 ## Important Rules
@@ -214,6 +214,15 @@ operator-jack browser launch [--port 9222]        # Launch Chrome with remote de
 operator-jack browser navigate <url> [--port N]   # Navigate to a URL via CDP
 operator-jack browser screenshot --output <path> [--full-page] [--port N]
 ```
+
+### Secrets (M8)
+```
+operator-jack secret set <name> [--value V]   # Store in keychain (value from stdin if omitted)
+operator-jack secret list                      # List secret names (never values)
+operator-jack secret rm <name>                 # Remove a secret
+```
+Reference a secret in any plan/skill param as `{{secret:name}}`; the engine
+resolves it at execution time and never persists the literal value.
 
 ## Common Flags
 

@@ -435,6 +435,40 @@ impl Engine {
                 }
             }
 
+            // -- 9c2. Resolve {{secret:name}} refs for DISPATCH ONLY. The audited
+            //          params (input_json, above) keep the reference form, so the
+            //          literal secret never enters the store, logs, or evidence.
+            let dispatch_params = if operator_core::secrets::has_secret_refs(&interpolated_params) {
+                match operator_core::secrets::resolve_secrets(&interpolated_params) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let msg = format!("Secret resolution failed: {e}");
+                        tracing::warn!(step_id = %step.id, "{}", msg);
+                        let sr = make_failed_step_result(
+                            &run_id,
+                            &step.id,
+                            idx,
+                            &interpolated_params,
+                            &msg,
+                        );
+                        let _ = self.store.insert_step_result(&sr);
+                        emit_step_failed(&self.store, &mut logger, &run_id, &step.id, idx, &msg);
+                        steps_failed += 1;
+                        match handle_on_fail(&step.effective_on_fail(), self.config.interactive) {
+                            OnFailAction::Abort => {
+                                aborted = true;
+                                steps_skipped += total_steps - idx - 1;
+                                break;
+                            }
+                            OnFailAction::Continue => continue,
+                            OnFailAction::Retry => continue,
+                        }
+                    }
+                }
+            } else {
+                interpolated_params.clone()
+            };
+
             // -- 9d. Execute step (with retries + timeout) -----------------------
             let max_retries = step.effective_retries(self.config.default_retries);
             let backoff_ms = step.effective_backoff_ms(self.config.default_backoff_ms);
@@ -519,10 +553,12 @@ impl Engine {
                 };
                 let _ = self.store.insert_step_result(&sr);
 
-                // P1 fix: Dispatch execution with timeout enforcement
+                // P1 fix: Dispatch execution with timeout enforcement.
+                // Uses dispatch_params (secrets resolved); the stored input_json
+                // above keeps the {{secret:*}} reference form.
                 let exec_result = execute_with_timeout(
                     &step.step_type,
-                    &interpolated_params,
+                    &dispatch_params,
                     &mut helper,
                     timeout_ms,
                 );
@@ -532,7 +568,7 @@ impl Engine {
                     exec_result,
                     self.config.interactive,
                     &step.step_type,
-                    &interpolated_params,
+                    &dispatch_params,
                     &mut helper,
                     timeout_ms,
                 );
