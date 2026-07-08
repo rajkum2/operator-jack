@@ -220,6 +220,23 @@ func isInteractiveElement(_ element: AXUIElement) -> Bool {
     return r == .success && settable.boolValue
 }
 
+/// True if the element is a secure text field (password input). The helper
+/// refuses to type into these regardless of mode — credentials must be supplied
+/// through the secret path, not model-driven typing (SPEC_FREEZE_V0.8 §3/§5).
+func isSecureTextField(_ element: AXUIElement) -> Bool {
+    let role = axGetStringAttribute(element, kAXRoleAttribute as String)
+    let subrole = axGetStringAttribute(element, kAXSubroleAttribute as String)
+    return subrole == "AXSecureTextField" || role == "AXSecureTextField"
+}
+
+/// Returns an app's currently focused UI element, if any.
+func axFocusedElement(_ appElement: AXUIElement) -> AXUIElement? {
+    guard let value = axGetAttribute(appElement, kAXFocusedUIElementAttribute as String),
+        CFGetTypeID(value) == AXUIElementGetTypeID()
+    else { return nil }
+    return (value as! AXUIElement)
+}
+
 /// Shortens an AX role for compact snapshots: strips the `AX` prefix and
 /// lowercases (`AXButton` -> `button`, `AXStaticText` -> `statictext`).
 func shortRole(_ role: String) -> String {

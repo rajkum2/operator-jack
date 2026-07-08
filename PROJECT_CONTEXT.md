@@ -9,7 +9,7 @@
 ## Quick Start (For New Session)
 
 1. Read this file completely
-2. Read the roadmap: `MASTER_PLAN.md` (authoritative, M7-M15). Newest spec: `SPEC_FREEZE_V0.7.md` (M7 perception); prior: `SPEC_FREEZE_V0.6.md` (M5 browser), `SPEC_FREEZE_V0.5.md` (M6 skills, retroactive); base contract: `SPEC_FREEZE_V0.2.md`
+2. Read the roadmap: `MASTER_PLAN.md` (authoritative, M7-M15). Newest spec: `SPEC_FREEZE_V0.8.md` (M8 safety envelope); prior: `SPEC_FREEZE_V0.7.md` (M7 perception), `SPEC_FREEZE_V0.6.md` (M5 browser), `SPEC_FREEZE_V0.5.md` (M6 skills, retroactive); base contract: `SPEC_FREEZE_V0.2.md`
 3. Check `VERSION_LOG` below for what changed last
 4. Check `CURRENT_STATE` below for what's built vs pending
 5. Check `NEXT_ACTIONS` for what to do next
@@ -34,6 +34,7 @@
 |------|---------|
 | `PROJECT_CONTEXT.md` | THIS FILE — resume context, version log, state tracker |
 | `MASTER_PLAN.md` | Authoritative forward roadmap (M7-M15) |
+| `SPEC_FREEZE_V0.8.md` | M8 spec — safety envelope (grants, budgets + Partial status, escalation classifier, redaction hardening) |
 | `SPEC_FREEZE_V0.7.md` | M7 spec — observation API (ui.snapshot/ui.screenshot, refs, Electron AX, path selectors) |
 | `SPEC_FREEZE_V0.6.md` | M5 spec delta — browser executor / CDP |
 | `SPEC_FREEZE_V0.5.md` | M6 spec — skills system (written retroactively) |
@@ -78,6 +79,17 @@
 ---
 
 ## VERSION_LOG
+
+### v0.9.0 — 2026-07-08
+**Status:** M8 core complete. The Safety Envelope — a grantable, bounded, auditable policy model so a model can drive the executors without constant prompts or unbounded blast radius. 139 Rust tests + 10 Swift tests pass. (Keychain secret store deferred — see item 7.)
+**Changes:**
+1. **Task-scoped grants** on Plan + Config: `grants: { fs_read, fs_write, exec, domains }` (glob / command / host patterns). Additive restrictions (absent = unrestricted); the config and plan layers must BOTH allow (most restrictive wins). Enforced in the runtime PolicyGate on interpolated params; fs paths are canonicalized (`~`, `..`) so they cannot escape a grant. A violation is DENIED with a message naming the exact grant and surfaces process exit code 3. Verified live: a write inside the grant succeeds; a write outside is denied (exit 3, no file created).
+2. **Run budgets** on Plan + Config: `budget: { max_steps, max_wall_ms, max_bytes_written, max_llm_calls, max_llm_cost_usd }` (the LLM fields are dormant until M10). Checked in the engine loop; on exhaustion the run ends with a NEW terminal status **`Partial`** (completed step results preserved). Verified live: max_steps=1 over a 3-step plan → status `partial` (1 succeeded, 2 skipped).
+3. **Always-escalate classifier** (non-overridable by grants or `--yes`): `sys.exec` with sudo / `rm -rf` / pipe-to-shell; `sys.delete_path` that would remove > 25 entries; `ui.click`/`ui.key_press` on Send/Buy/Pay/Checkout-like controls in Mail/Messages/Slack; and a hard Swift-helper refusal to type or set-value into a secure text field (`AXSecureTextField`). Verified live: `sudo` under `--mode unsafe --yes` is still denied ("Escalation required (a human must approve)"), exit code 3, sudo never ran.
+4. **Redaction hardening**: `plan_json` is now redacted at rest in the store (was the one unredacted CRUD write); the blanket "any string with a slash is exempt" rule is replaced by a precise looks-like-a-path test, so slash-bearing base64 secrets are redacted again while real paths stay exempt.
+5. **Exit codes**: policy/grant/escalation denial → 3; `Partial` (budget) → 7.
+6. Created `SPEC_FREEZE_V0.8.md` (M8 safety envelope spec); added `docs/examples/grants-scoped-write.json` (fs_write grant + budget).
+7. **Deferred (0.9.x follow-on, M8.5):** the Keychain secret store + `{{secret:name}}` injection. The secure-field refusal (the safety half) is done; the credential-injection half is a self-contained follow-on whose consumers (M9 MCP, M10 agent loop) are not built yet.
 
 ### v0.8.0 — 2026-07-08
 **Status:** M7 complete. Perception / Observation API — models can now see the screen (AX-tree snapshots + screenshots). 129 Rust tests + 10 Swift tests pass.
@@ -311,6 +323,15 @@
 - [x] Chromium/Electron AX enablement (AXManualAccessibility + messaging timeout + first-read settle); `path` selector matching; `doctor` Screen Recording permission check
 - [x] docs/examples/snapshot-calculator.json
 - [x] 129 Rust tests + 10 Swift tests passing (v0.8.0)
+- [x] SPEC_FREEZE_V0.8.md (M8 safety envelope spec)
+- [x] M8 task-scoped grants: `grants: {fs_read, fs_write, exec, domains}` on Plan + Config (intersected, path-canonicalized), enforced in the runtime PolicyGate on interpolated params; denial names the exact grant
+- [x] M8 run budgets: `budget: {max_steps, max_wall_ms, max_bytes_written, max_llm_calls, max_llm_cost_usd}` checked in the engine loop; new terminal run status `Partial` on exhaustion (completed step results preserved; LLM fields dormant until M10)
+- [x] M8 always-escalate classifier (non-overridable by grants/`--yes`): sudo / `rm -rf` / pipe-to-shell exec, bulk-delete > 25 entries, send/purchase controls in Mail/Messages/Slack, and a Swift-helper refusal to type into `AXSecureTextField`
+- [x] M8 redaction hardening: `plan_json` redacted at rest; slash-exemption narrowed to a looks-like-path test
+- [x] M8 exit codes: policy/grant/escalation denial → 3; `Partial` (budget) → 7
+- [x] docs/examples/grants-scoped-write.json (fs_write grant + budget)
+- [x] 139 Rust tests + 10 Swift tests passing (v0.9.0)
+- [ ] DEFERRED (0.9.x / M8.5): Keychain secret store + `{{secret:name}}` injection (secure-field refusal done; credential-injection half pending — consumers M9/M10 not built yet)
 
 ### Milestone Status
 
@@ -327,7 +348,8 @@
 | M6 | DONE | Skills system (manifest → plan expansion; skill list/validate/run) |
 | Phase B | DONE | Stabilization (v0.7.1): audit/security fixes, Swift correctness + test target, docs reconciliation |
 | M7 | DONE | Perception / Observation API: ui.snapshot (compact AX + refs), ui.screenshot, Electron/Chromium AX enablement, path selectors, doctor Screen Recording check |
-| M8-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md — M8 safety envelope (next), M9 MCP, M10 agent loop, M11 long-horizon, M12 browser wiring, M13 control flow, M14 AppleScript/OCR, M15 trust |
+| M8 | DONE* | Safety envelope: task-scoped grants (fs/exec/domains), run budgets + `Partial` status, always-escalate classifier, secure-field refusal, redaction hardening, exit code 3. *Keychain secret store (`{{secret:}}`) deferred to a 0.9.x follow-on (M8.5) |
+| M9-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md — M9 MCP server (next), M10 agent loop, M11 long-horizon, M12 browser wiring, M13 control flow, M14 AppleScript/OCR, M15 trust |
 
 ---
 
@@ -335,9 +357,10 @@
 
 **Immediate next steps (in order) — see MASTER_PLAN.md for full detail:**
 
-1. **M8 — Safety Envelope (v0.9.0)** — task-scoped grants, run budgets, Keychain secret store, always-escalate classifier. Was the parallel track to M7; now the critical path — it unblocks M9 (MCP server) and M10 (native agent loop).
+1. **M8.5 — Keychain secret store (0.9.x follow-on)** — finish the deferred half of M8: `operator-jack secret set/list/rm` (security-framework) + `{{secret:name}}` refs resolved only at execution time, tainted/force-redacted in results, and injected into the target field by the helper without ever entering a model prompt or the store. The secure-field refusal (the safety half) already shipped in v0.9.0.
+2. **M9 — MCP Server Mode (v0.10.0)** — expose Operator Jack as an MCP server (`operator-jack mcp serve`) so any MCP client drives the gated executors; owns the RunSession refactor. First shippable autonomy. Depends on M7 + M8 (both done).
 
-**MASTER_PLAN.md is the authoritative roadmap for M7-M15.** M0-M7 plus Phase B (v0.7.1) are complete.
+**MASTER_PLAN.md is the authoritative roadmap for M7-M15.** M0-M8 core plus Phase B (v0.7.1) are complete (M8.5 Keychain secrets pending).
 
 ---
 
@@ -386,4 +409,4 @@ When multiple AX elements match and no `index` is given: interactive mode prompt
 
 ---
 
-*Last updated: 2026-07-08 — M7 COMPLETE (v0.8.0). Perception / Observation API: ui.snapshot (compact AX serialization + actionable refs), ui.screenshot (downscaled PNG to disk, Screen Recording gated), Chromium/Electron AX enablement + first-read settle, path selector matching, doctor Screen Recording check. M0-M7 plus Phase B done. 129 Rust tests + 10 Swift tests passing. Next: M8 (Safety Envelope) per MASTER_PLAN.md.*
+*Last updated: 2026-07-08 — M8 CORE COMPLETE (v0.9.0). The Safety Envelope: task-scoped grants (fs/exec/domains), run budgets + new `Partial` terminal status, always-escalate classifier (sudo / rm -rf / pipe-to-shell, bulk-delete > 25, send/purchase in messaging apps, hard secure-field typing refusal), redaction hardening (plan_json at rest, looks-like-path exemption), policy-denial exit code 3. M0-M8 core plus Phase B done. 139 Rust tests + 10 Swift tests passing. Keychain secret store + {{secret:}} injection deferred to a 0.9.x follow-on (M8.5). Next: M8.5 then M9 (MCP server) per MASTER_PLAN.md.*

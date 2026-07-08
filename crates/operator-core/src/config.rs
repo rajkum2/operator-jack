@@ -37,6 +37,14 @@ pub struct OperatorConfig {
     #[serde(default)]
     pub allow_domains: Vec<String>,
 
+    /// Default task-scoped capability grants (M8). None = unrestricted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grants: Option<crate::grants::Grants>,
+
+    /// Default whole-run resource budget (M8). None = unbounded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<crate::grants::RunBudget>,
+
     /// Custom log directory.
     pub log_dir: Option<String>,
 
@@ -107,6 +115,8 @@ impl Default for OperatorConfig {
             default_retry_backoff_ms: 1_000,
             allow_apps: Vec::new(),
             allow_domains: Vec::new(),
+            grants: None,
+            budget: None,
             log_dir: None,
             db_path: None,
             default_provider: "ollama".to_string(),

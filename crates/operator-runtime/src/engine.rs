@@ -16,7 +16,7 @@ use operator_ipc::client::HelperClient;
 use operator_store::Store;
 
 use crate::logging::RunLogger;
-use crate::policy::{PolicyDecision, PolicyError, PolicyGate};
+use crate::policy::{PolicyDecision, PolicyGate};
 use crate::RuntimeError;
 
 // ---------------------------------------------------------------------------
@@ -48,6 +48,10 @@ pub struct EngineConfig {
     pub default_retries: u32,
     /// Default initial backoff in milliseconds between retries.
     pub default_backoff_ms: u64,
+    /// Config-level task-scoped grants (M8). Intersected with the plan's.
+    pub grants: Option<operator_core::grants::Grants>,
+    /// Config-level run budget (M8). Intersected with the plan's (min wins).
+    pub budget: Option<operator_core::grants::RunBudget>,
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +68,9 @@ pub struct RunSummary {
     pub steps_failed: usize,
     pub steps_skipped: usize,
     pub duration_ms: u64,
+    /// True if a step was denied by the policy gate (allow-list, grant, or
+    /// escalation). Drives the CLI's policy-denied exit code (3).
+    pub policy_denied: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +158,16 @@ impl Engine {
         let allow_apps = intersect_lists(&self.config.allow_apps, &plan.allow_apps);
         let allow_domains = intersect_lists(&self.config.allow_domains, &plan.allow_domains);
 
+        // Grant layers: config + plan. Each present layer must allow a step
+        // (most restrictive wins). Absent grants impose no restriction.
+        let mut grant_layers: Vec<operator_core::grants::Grants> = Vec::new();
+        if let Some(ref g) = self.config.grants {
+            grant_layers.push(g.clone());
+        }
+        if let Some(ref g) = plan.grants {
+            grant_layers.push(g.clone());
+        }
+
         let policy = PolicyGate::new(
             effective_mode.clone(),
             self.config.yes_to_all,
@@ -158,6 +175,7 @@ impl Engine {
             self.config.dry_run,
             allow_apps,
             allow_domains,
+            grant_layers,
         );
 
         // -- 6. Optionally create HelperClient (lazy connect on first UI step) --
@@ -192,8 +210,35 @@ impl Engine {
         let mut steps_failed: usize = 0;
         let mut steps_skipped: usize = 0;
         let mut aborted = false;
+        let mut policy_denied = false;
+        let mut budget_exceeded: Option<String> = None;
+        let mut bytes_written: u64 = 0;
+
+        // Effective run budget = most restrictive of config + plan budgets.
+        let budget = merge_budgets(self.config.budget.as_ref(), plan.budget.as_ref());
 
         for (idx, step) in plan.steps.iter().enumerate() {
+            // -- 9a0. Budget: step count / wall clock (checked before each step) -
+            if let Some(ref b) = budget {
+                if let Some(max) = b.max_steps {
+                    if idx as u64 >= max {
+                        budget_exceeded = Some(format!("max_steps ({max}) reached"));
+                    }
+                }
+                if budget_exceeded.is_none() {
+                    if let Some(max) = b.max_wall_ms {
+                        if wall_start.elapsed().as_millis() as u64 >= max {
+                            budget_exceeded = Some(format!("max_wall_ms ({max}) reached"));
+                        }
+                    }
+                }
+                if let Some(ref reason) = budget_exceeded {
+                    tracing::warn!(run_id = %run_id, "budget exceeded: {reason}");
+                    steps_skipped += total_steps - idx;
+                    break;
+                }
+            }
+
             // -- 9a. Check cancel flag ------------------------------------------
             if self.cancel_flag.load(Ordering::Relaxed) {
                 tracing::warn!(run_id = %run_id, "cancel requested, skipping remaining steps");
@@ -265,33 +310,12 @@ impl Engine {
             let policy_decision =
                 match policy.check_step_with_params(step, &interpolated_params, idx, total_steps) {
                     Ok(d) => d,
-                    Err(PolicyError::AppNotAllowed(app)) => {
-                        let msg = format!("App not allowed: {}", app);
-                        tracing::warn!(step_id = %step.id, "{}", msg);
-                        let sr = make_failed_step_result(
-                            &run_id,
-                            &step.id,
-                            idx,
-                            &interpolated_params,
-                            &msg,
-                        );
-                        let _ = self.store.insert_step_result(&sr);
-                        emit_step_failed(&self.store, &mut logger, &run_id, &step.id, idx, &msg);
-                        steps_failed += 1;
-
-                        // Respect on_fail instead of unconditional abort.
-                        match handle_on_fail(&step.effective_on_fail(), self.config.interactive) {
-                            OnFailAction::Abort => {
-                                aborted = true;
-                                steps_skipped += total_steps - idx - 1;
-                                break;
-                            }
-                            OnFailAction::Continue => continue,
-                            OnFailAction::Retry => continue, // cannot retry a policy error
-                        }
-                    }
-                    Err(PolicyError::DomainNotAllowed(domain)) => {
-                        let msg = format!("Domain not allowed: {}", domain);
+                    // All policy denials (app/domain allow-list, grant, escalation)
+                    // are hard failures handled uniformly and flag the run for the
+                    // policy-denied exit code.
+                    Err(policy_err) => {
+                        policy_denied = true;
+                        let msg = policy_err.to_string();
                         tracing::warn!(step_id = %step.id, "{}", msg);
                         let sr = make_failed_step_result(
                             &run_id,
@@ -598,6 +622,26 @@ impl Engine {
 
             if step_succeeded {
                 steps_succeeded += 1;
+
+                // Budget: accumulate bytes written by fs-write steps and stop if
+                // the run exceeds its write allowance.
+                if matches!(
+                    step.step_type,
+                    StepType::SysWriteFile | StepType::SysAppendFile
+                ) {
+                    if let Some(content) =
+                        interpolated_params.get("content").and_then(|v| v.as_str())
+                    {
+                        bytes_written += content.len() as u64;
+                    }
+                }
+                if let Some(max) = budget.as_ref().and_then(|b| b.max_bytes_written) {
+                    if bytes_written > max {
+                        budget_exceeded = Some(format!("max_bytes_written ({max}) exceeded"));
+                        steps_skipped += total_steps - idx - 1;
+                        break;
+                    }
+                }
             } else {
                 // All attempts exhausted (or cancelled during retries)
                 steps_failed += 1;
@@ -707,6 +751,9 @@ impl Engine {
             RunStatus::Cancelled
         } else if aborted {
             RunStatus::Failed
+        } else if budget_exceeded.is_some() {
+            // Stopped early for a non-error reason (budget) — preserve results.
+            RunStatus::Partial
         } else if steps_failed > 0 {
             RunStatus::CompletedWithErrors
         } else {
@@ -743,6 +790,8 @@ impl Engine {
                 "steps_failed": steps_failed,
                 "steps_skipped": steps_skipped,
                 "duration_ms": duration_ms,
+                "budget_exceeded": budget_exceeded,
+                "policy_denied": policy_denied,
             }),
         );
         self.store.insert_event(&run_finished_event)?;
@@ -772,7 +821,38 @@ impl Engine {
             steps_failed,
             steps_skipped,
             duration_ms,
+            policy_denied,
         })
+    }
+}
+
+/// Merges config + plan run budgets into the most restrictive combination
+/// (the smaller of each present limit). Returns `None` if neither sets a budget.
+fn merge_budgets(
+    config: Option<&operator_core::grants::RunBudget>,
+    plan: Option<&operator_core::grants::RunBudget>,
+) -> Option<operator_core::grants::RunBudget> {
+    match (config, plan) {
+        (None, None) => None,
+        (Some(b), None) | (None, Some(b)) => Some(b.clone()),
+        (Some(a), Some(b)) => {
+            fn min_opt<T: Ord + Copy>(x: Option<T>, y: Option<T>) -> Option<T> {
+                match (x, y) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (v, None) | (None, v) => v,
+                }
+            }
+            Some(operator_core::grants::RunBudget {
+                max_steps: min_opt(a.max_steps, b.max_steps),
+                max_wall_ms: min_opt(a.max_wall_ms, b.max_wall_ms),
+                max_bytes_written: min_opt(a.max_bytes_written, b.max_bytes_written),
+                max_llm_calls: min_opt(a.max_llm_calls, b.max_llm_calls),
+                max_llm_cost_usd: match (a.max_llm_cost_usd, b.max_llm_cost_usd) {
+                    (Some(x), Some(y)) => Some(x.min(y)),
+                    (v, None) | (None, v) => v,
+                },
+            })
+        }
     }
 }
 

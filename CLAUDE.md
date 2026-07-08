@@ -21,7 +21,7 @@ export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 # Build Rust workspace
 cd /Users/kirankumaralugonda/operator-jack && cargo build
 
-# Run Rust tests (129 tests)
+# Run Rust tests (139 tests)
 cargo test
 
 # Build Swift helper and run Swift tests (10 tests)
@@ -109,13 +109,14 @@ operator-jack/
 - `path` is a real matcher: suffix match on the computed traversal path (implemented in M7; was rejected-when-alone in Phase B)
 
 ### Testing
-- Rust: `cargo test` — unit tests in each crate's source files (129 tests)
+- Rust: `cargo test` — unit tests in each crate's source files (139 tests)
 - Swift: `cd macos-helper && swift test` — XCTest target at `Tests/OperatorMacOSHelperTests/` (10 tests; selector parsing + criteria). AX-dependent behavior is covered by the live acceptance harness.
 - Acceptance: `make check-examples` validates every golden plan in `docs/examples/` and dry-run-expands every skill. **No example or skill ships without passing it.** Run a plan live via `operator-jack run --plan-file <path> --mode unsafe --yes`.
 
 ## Spec Files
 
 - **MASTER_PLAN.md** — Authoritative forward roadmap (M7-M15). Read this for what's next.
+- **SPEC_FREEZE_V0.8.md** — M8 delta: safety envelope (task-scoped grants, run budgets + `Partial` status, always-escalate classifier, redaction hardening)
 - **SPEC_FREEZE_V0.7.md** — M7 delta: observation API (`ui.snapshot`/`ui.screenshot`, element refs, Electron/Chromium AX enablement, `path` selector matching)
 - **SPEC_FREEZE_V0.6.md** — M5 delta: browser lane (`browser.*` step types, CDP, tokio, Chrome process management, `allow_domains` for browser)
 - **SPEC_FREEZE_V0.5.md** — M6 skills spec (written retroactively): manifest schema, parameters, expansion to plans
@@ -138,17 +139,18 @@ operator-jack/
 | M6 | DONE | Skills system (manifest → plan expansion; skill list/validate/run) |
 | Phase B | DONE | Stabilization (v0.7.1): audit fixes, Swift correctness, security fixes, docs |
 | M7 | DONE | Perception: ui.snapshot (compact AX + refs), ui.screenshot, Electron AX enablement, path selectors, doctor screen-recording check |
-| M8-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md (M8=safety envelope [next], M9=MCP, M10=agent loop, M11=long-horizon, M12=browser wiring, M13=control flow, M14=AppleScript/OCR, M15=trust) |
+| M8 | DONE* | Safety envelope: task-scoped grants (fs/exec/domains), run budgets + Partial status, always-escalate classifier, secure-field refusal, redaction hardening, exit code 3. *Keychain secret store ({{secret:}}) deferred to a 0.9.x follow-on |
+| M9-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md (M9=MCP [next], M10=agent loop, M11=long-horizon, M12=browser wiring, M13=control flow, M14=AppleScript/OCR, M15=trust) |
 
 ## Important Rules
 
-1. **Spec is normative.** Check the relevant SPEC_FREEZE (V0.2 base; V0.3 UI; V0.4 planner; V0.5 skills; V0.6 browser; V0.7 observation) before inventing behavior; check MASTER_PLAN.md for anything M8+.
+1. **Spec is normative.** Check the relevant SPEC_FREEZE (V0.2 base; V0.3 UI; V0.4 planner; V0.5 skills; V0.6 browser; V0.7 observation; V0.8 safety envelope) before inventing behavior; check MASTER_PLAN.md for anything M9+.
 2. **Async allowed (M5+).** tokio is now a dependency (`operator-cli`, `operator-exec-browser`) for the browser/CDP lane. The old "no async / no tokio" rule is obsolete.
 3. **Every change must compile.** Run `cargo build && cargo test && cd macos-helper && swift build`.
 4. **Update PROJECT_CONTEXT.md** after completing milestones.
 5. **Redact before logging.** Apply redaction rules from spec Section 18.
 6. **ULIDs everywhere.** For all IDs across the system.
-7. **Two-mode policy.** Safe (confirm medium+high) / Unsafe (allow all). Not three-tier.
+7. **Two-mode policy.** Safe (confirm medium+high) / Unsafe (allow all). Not three-tier. M8 adds task-scoped grants + run budgets + an always-escalate classifier on top (see SPEC_FREEZE_V0.8.md).
 8. **Raw ApplicationServices.** No AXSwift. Direct AXUIElement* API calls.
 
 ## Current Handler Registry (18 handlers)

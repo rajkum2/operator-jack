@@ -55,6 +55,7 @@ fn is_terminal_run_status(status: &RunStatus) -> bool {
             | RunStatus::CompletedWithErrors
             | RunStatus::Failed
             | RunStatus::Cancelled
+            | RunStatus::Partial
     )
 }
 
@@ -108,7 +109,11 @@ impl Store {
     /// Returns the generated plan id.
     pub fn save_plan(&self, plan: &Plan) -> Result<String, StoreError> {
         let plan_id = ulid::Ulid::new().to_string();
-        let plan_json = serde_json::to_string(plan)?;
+        // Redact the plan before storage (spec §18 / V0.8 §6): a plan param may
+        // embed a secret literal. `{{secret:*}}` refs keep plans re-executable
+        // without persisting the literal.
+        let plan_value = serde_json::to_value(plan)?;
+        let plan_json = redact_value(&plan_value).to_string();
         let now = Utc::now().to_rfc3339();
 
         let mode_str: Option<String> = plan.mode.as_ref().map(to_db_string).transpose()?;
@@ -606,6 +611,8 @@ mod tests {
             mode: Some(Mode::Safe),
             allow_apps: Some(vec!["Safari".to_string()]),
             allow_domains: Some(vec!["example.com".to_string()]),
+            grants: None,
+            budget: None,
             variables: None,
             steps: vec![Step {
                 id: "step-1".to_string(),

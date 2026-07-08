@@ -30,17 +30,32 @@ func handleTypeText(_ params: [String: JSONValue]) throws -> [String: JSONValue]
     app.activate(options: .activateIgnoringOtherApps)
     Thread.sleep(forTimeInterval: 0.1) // Brief pause for activation
 
+    let appElement = axAppElement(for: app)
+
     // If a selector is provided, find and focus the element
     if let selector = SelectorParams.parse(from: params) {
-        let appElement = axAppElement(for: app)
         let waitMs = extractImplicitWaitMs(from: params)
         let windowElement = try resolveWindow(appElement: appElement, scope: selector.window)
         let results = try implicitWaitForElement(root: windowElement, selector: selector, waitMs: waitMs)
         let match = try disambiguate(results: results, index: selector.index)
 
+        // Refuse to type into a secure (password) field.
+        if isSecureTextField(match.element) {
+            throw HelperError(
+                code: "SECURE_FIELD_REFUSED",
+                message: "Refusing to type into a secure text field; use a {{secret:name}} reference instead"
+            )
+        }
+
         // Focus the element
         AXUIElementSetAttributeValue(match.element, kAXFocusedAttribute as CFString, true as CFTypeRef)
         Thread.sleep(forTimeInterval: 0.05)
+    } else if let focused = axFocusedElement(appElement), isSecureTextField(focused) {
+        // No selector: guard the currently focused element.
+        throw HelperError(
+            code: "SECURE_FIELD_REFUSED",
+            message: "Refusing to type into the focused secure text field; use a {{secret:name}} reference instead"
+        )
     }
 
     // Type via CGEvent unicode keystrokes

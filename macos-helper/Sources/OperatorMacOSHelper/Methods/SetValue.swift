@@ -26,6 +26,15 @@ func handleSetValue(_ params: [String: JSONValue]) throws -> [String: JSONValue]
     // Resolve target via element_ref (preferred) or selector.
     let match = try resolveActionTarget(params: params, app: app)
 
+    // Refuse to set a secure (password) field's value; credentials must use the
+    // secret path, not a model-supplied value.
+    if isSecureTextField(match.element) {
+        throw HelperError(
+            code: "SECURE_FIELD_REFUSED",
+            message: "Refusing to set a secure text field; use a {{secret:name}} reference instead"
+        )
+    }
+
     // Check if the value attribute is settable
     var settable: DarwinBoolean = false
     let settableResult = AXUIElementIsAttributeSettable(match.element, kAXValueAttribute as CFString, &settable)

@@ -367,6 +367,8 @@ impl ResolvedSkill {
             mode: Some(Mode::Safe),
             allow_apps: None,
             allow_domains: None,
+            grants: None,
+            budget: None,
             variables: None,
             steps: steps?,
         })

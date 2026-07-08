@@ -62,6 +62,20 @@ pub fn redact_value(value: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// True if the string is clearly a filesystem path (absolute, home/relative, a
+/// UNC path, or a Windows drive path) — as opposed to merely containing a slash.
+fn looks_like_path(s: &str) -> bool {
+    s.starts_with('/')
+        || s.starts_with("~/")
+        || s.starts_with("./")
+        || s.starts_with("../")
+        || s.starts_with(r"\\")
+        || (s.len() >= 3
+            && s.as_bytes()[0].is_ascii_alphabetic()
+            && s.as_bytes()[1] == b':'
+            && (s.as_bytes()[2] == b'\\' || s.as_bytes()[2] == b'/'))
+}
+
 /// Checks whether a key is a known sensitive key (case-insensitive).
 fn is_sensitive_key(key: &str) -> bool {
     let lower = key.to_ascii_lowercase();
@@ -71,8 +85,10 @@ fn is_sensitive_key(key: &str) -> bool {
 /// Determines whether a string value looks like a secret and should be
 /// redacted.
 fn should_redact_string(s: &str) -> bool {
-    // Do not redact values that look like file paths.
-    if s.contains('/') || s.contains('\\') {
+    // Do not redact values that are clearly filesystem paths. Unlike the old
+    // rule (exempt anything containing a slash), this still scans URLs,
+    // connection strings, and slash-bearing base64 tokens for secrets.
+    if looks_like_path(s) {
         return false;
     }
 
@@ -164,6 +180,29 @@ mod tests {
         let input = json!({"path": "/Users/alice/Documents/notes.txt"});
         let result = redact_value(&input);
         assert_eq!(result["path"], json!("/Users/alice/Documents/notes.txt"));
+    }
+
+    #[test]
+    fn test_base64_with_slash_now_redacted() {
+        // A long base64 secret containing '/' used to escape redaction via the
+        // blanket slash exemption; it must now be redacted.
+        let secret = "AAAA/BBBB/CCCC/DDDD/EEEE/FFFF/GGGG/HHHH/IIII/JJJJ=";
+        assert!(secret.contains('/'));
+        let input = json!({ "blob": secret });
+        assert_eq!(redact_value(&input)["blob"], json!("[REDACTED]"));
+    }
+
+    #[test]
+    fn test_real_paths_still_exempt() {
+        for p in [
+            "/etc/hosts",
+            "~/scraped/out.csv",
+            "./rel/file",
+            "../up/file",
+        ] {
+            let input = json!({ "p": p });
+            assert_eq!(redact_value(&input)["p"], json!(p), "path exempt: {p}");
+        }
     }
 
     #[test]

@@ -273,6 +273,9 @@ pub enum RunStatus {
     CompletedWithErrors,
     Failed,
     Cancelled,
+    /// Stopped early for a non-error reason (budget exhausted; later, an
+    /// escalation pause). Completed step results are preserved. Terminal.
+    Partial,
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +310,12 @@ pub struct Plan {
     pub allow_apps: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allow_domains: Option<Vec<String>>,
+    /// Task-scoped capability grants (M8). None = unrestricted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grants: Option<crate::grants::Grants>,
+    /// Whole-run resource budget (M8). None = unbounded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget: Option<crate::grants::RunBudget>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variables: Option<HashMap<String, serde_json::Value>>,
     pub steps: Vec<Step>,

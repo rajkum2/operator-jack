@@ -670,7 +670,7 @@ fn cmd_exec(cli: &Cli, plan_id: &str) -> Result<()> {
     match result {
         Ok(summary) => {
             print_run_summary(cli, &summary);
-            let code = exit_code_for_status(&summary.status);
+            let code = exit_code_for_summary(&summary);
             if code != 0 {
                 std::process::exit(code);
             }
@@ -778,7 +778,7 @@ fn cmd_run(cli: &Cli, plan_file: Option<PathBuf>, instruction: Option<String>) -
     match result {
         Ok(summary) => {
             print_run_summary(cli, &summary);
-            let code = exit_code_for_status(&summary.status);
+            let code = exit_code_for_summary(&summary);
             if code != 0 {
                 std::process::exit(code);
             }
@@ -1001,7 +1001,7 @@ fn cmd_do(
     match result {
         Ok(summary) => {
             print_run_summary(cli, &summary);
-            let code = exit_code_for_status(&summary.status);
+            let code = exit_code_for_summary(&summary);
             if code != 0 {
                 std::process::exit(code);
             }
@@ -1457,6 +1457,8 @@ fn build_engine_config(cli: &Cli) -> Result<EngineConfig> {
         default_timeout_ms: cfg.default_step_timeout_ms,
         default_retries: cfg.default_retries,
         default_backoff_ms: cfg.default_retry_backoff_ms,
+        grants: cfg.grants.clone(),
+        budget: cfg.budget.clone(),
     })
 }
 
@@ -1548,12 +1550,25 @@ fn read_pid_file(data_dir: &Path) -> Result<Option<(u32, String)>> {
 /// - 3: policy denied (handled elsewhere)
 /// - 4: reserved
 /// - 5: cancelled
-fn exit_code_for_status(status: &RunStatus) -> i32 {
-    match status {
+fn exit_code_for_summary(summary: &RunSummary) -> i32 {
+    // A policy/grant/escalation denial takes the dedicated exit code 3 over a
+    // generic failure code.
+    if summary.policy_denied
+        && matches!(
+            summary.status,
+            RunStatus::Failed | RunStatus::CompletedWithErrors
+        )
+    {
+        return 3;
+    }
+    match summary.status {
         RunStatus::Succeeded => 0,
         RunStatus::Failed => 1,
         RunStatus::CompletedWithErrors => 1,
         RunStatus::Cancelled => 5,
+        // Stopped early for a non-error reason (budget/escalation): distinct
+        // from success and from a step error.
+        RunStatus::Partial => 7,
         RunStatus::Queued | RunStatus::Running => 0,
     }
 }
@@ -2028,7 +2043,7 @@ fn cmd_skill_run(cli: &Cli, skill_name: &str, params: &[(String, String)]) -> Re
     match result {
         Ok(summary) => {
             print_run_summary(cli, &summary);
-            let code = exit_code_for_status(&summary.status);
+            let code = exit_code_for_summary(&summary);
             if code != 0 {
                 std::process::exit(code);
             }

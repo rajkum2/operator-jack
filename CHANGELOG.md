@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 See [`MASTER_PLAN.md`](MASTER_PLAN.md) for the authoritative M7-M15 roadmap (safety envelope, MCP server, native agent loop, and beyond).
 
+## [0.9.0] - 2026-07-08
+
+M8 — the Safety Envelope. A grantable, bounded, auditable policy model so a model can drive the executors without constant prompts or unbounded blast radius.
+
+### Added
+- **Task-scoped grants** on plans and config: `grants: { fs_read, fs_write, exec, domains }` (glob / command / host patterns). Restrictions are additive (absent = unrestricted) and the config and plan layers must both allow (most restrictive wins). Enforced in the runtime policy gate on interpolated params; filesystem paths are canonicalized (`~`, `..`) so they cannot escape a grant. A violation is denied with a message naming the exact grant.
+- **Run budgets** on plans and config: `budget: { max_steps, max_wall_ms, max_bytes_written, max_llm_calls, max_llm_cost_usd }` (the LLM fields are dormant until M10). Checked in the engine step loop; on exhaustion the run ends with a new terminal `Partial` run status, with completed step results preserved.
+- **Always-escalate classifier** (non-overridable by grants or `--yes`): `sys.exec` containing `sudo`, `rm -rf`, or a pipe-to-shell; `sys.delete_path` that would remove more than 25 entries; `ui.click`/`ui.key_press` on Send/Buy/Pay/Checkout-like controls in Mail/Messages/Slack; and a hard Swift-helper refusal to type or set a value into a secure text field (`AXSecureTextField`).
+- Exit codes: policy/grant/escalation denial → `3`; a `Partial` (budget-exhausted) run → `7`.
+- SPEC_FREEZE_V0.8.md (M8 safety envelope spec).
+- `docs/examples/grants-scoped-write.json` (fs_write grant + budget).
+
+### Security
+- `plan_json` is now redacted at rest in the store (previously the one unredacted CRUD write).
+- The blanket "any string containing a slash is exempt from redaction" rule is replaced by a precise looks-like-a-path test, so slash-bearing base64 secrets are redacted again while real filesystem paths stay exempt.
+
+### Note
+- The Keychain secret store and `{{secret:name}}` injection are deferred to a 0.9.x follow-on (M8.5). The secure-field refusal (the safety half) shipped here; the credential-injection half follows once its consumers (M9 MCP, M10 agent loop) exist.
+
 ## [0.8.0] - 2026-07-08
 
 M7 — Perception / Observation API. Models can now see the screen.

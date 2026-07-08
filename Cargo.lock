@@ -140,6 +140,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bstr"
+version = "1.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5cee35f73844aa3014bb606320a6c1f010249dbdf43342fe54b5a4f6a8ed4b79"
+dependencies = [
+ "memchr",
+ "serde_core",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -590,6 +600,19 @@ checksum = "4ae047235e33e2829703574b54fdec96bfbad892062d97fed2f76022287de61b"
 dependencies = [
  "color_quant",
  "weezl",
+]
+
+[[package]]
+name = "globset"
+version = "0.4.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52dfc19153a48bde0cbd630453615c8151bce3a5adfac7a0aebfbf0a1e1f57e3"
+dependencies = [
+ "aho-corasick",
+ "bstr",
+ "log",
+ "regex-automata",
+ "regex-syntax",
 ]
 
 [[package]]
@@ -1125,7 +1148,7 @@ dependencies = [
 
 [[package]]
 name = "operator-cli"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1147,10 +1170,11 @@ dependencies = [
 
 [[package]]
 name = "operator-core"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "chrono",
  "dirs",
+ "globset",
  "regex",
  "serde",
  "serde_json",
@@ -1161,7 +1185,7 @@ dependencies = [
 
 [[package]]
 name = "operator-exec-browser"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1181,7 +1205,7 @@ dependencies = [
 
 [[package]]
 name = "operator-exec-system"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "operator-core",
  "serde_json",
@@ -1192,7 +1216,7 @@ dependencies = [
 
 [[package]]
 name = "operator-ipc"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "operator-core",
  "serde",
@@ -1204,7 +1228,7 @@ dependencies = [
 
 [[package]]
 name = "operator-planner"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "operator-core",
@@ -1220,7 +1244,7 @@ dependencies = [
 
 [[package]]
 name = "operator-runtime"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "chrono",
  "operator-core",
@@ -1236,7 +1260,7 @@ dependencies = [
 
 [[package]]
 name = "operator-skills"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -1252,7 +1276,7 @@ dependencies = [
 
 [[package]]
 name = "operator-store"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "chrono",
  "operator-core",
