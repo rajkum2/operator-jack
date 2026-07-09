@@ -893,6 +893,299 @@ fn merge_budgets(
 }
 
 // ---------------------------------------------------------------------------
+// RunSession — ad-hoc, one-step-at-a-time gated execution
+// ---------------------------------------------------------------------------
+
+/// The outcome of a failed session step, so callers (MCP tools, the agent loop)
+/// can distinguish a policy/grant/escalation denial from an execution error.
+#[derive(Debug, thiserror::Error)]
+pub enum SessionError {
+    /// Denied by the policy gate (allow-list, grant, escalation, or confirmation).
+    #[error("policy denied: {0}")]
+    Denied(String),
+    /// The step ran but errored (execution/IPC/timeout).
+    #[error("{0}")]
+    Failed(String),
+}
+
+/// A live execution session for **ad-hoc, one-step-at-a-time** gated execution —
+/// the shared substrate for MCP server mode (M9) and the native agent loop (M10).
+///
+/// Unlike [`Engine::execute_plan`] (which runs a fixed plan), a session executes
+/// steps supplied one at a time (e.g. per MCP tool call). It holds a *persistent*
+/// helper connection, so element refs minted by `ui.snapshot` survive across
+/// calls, and a single run in the store, so every step is audited under one
+/// session. Each step goes through the **same** policy gate, secret resolution,
+/// redaction, and dispatch path as plan execution (shared helpers), so grants,
+/// budgets, the escalation classifier, and audit apply identically.
+pub struct RunSession {
+    store: Store,
+    config: EngineConfig,
+    run_id: String,
+    plan_id: String,
+    policy: PolicyGate,
+    helper: Option<HelperClient>,
+    logger: RunLogger,
+    step_index: u32,
+    steps_succeeded: usize,
+    steps_failed: usize,
+    policy_denied: bool,
+    wall_start: Instant,
+}
+
+impl RunSession {
+    /// Opens a session: persists a synthetic session plan (so the run has a
+    /// plan row and records the granted envelope), creates the run, builds the
+    /// policy gate from config + session grants, and prepares a lazily-connected
+    /// helper.
+    pub fn open(
+        store: Store,
+        config: EngineConfig,
+        session_grants: Option<operator_core::grants::Grants>,
+        session_budget: Option<operator_core::grants::RunBudget>,
+    ) -> Result<Self, RuntimeError> {
+        let mode = config.mode.clone();
+        let session_plan = Plan {
+            schema_version: 1,
+            name: "mcp-session".to_string(),
+            description: Some("Ad-hoc session (MCP / agent loop)".to_string()),
+            mode: Some(mode.clone()),
+            allow_apps: (!config.allow_apps.is_empty()).then(|| config.allow_apps.clone()),
+            allow_domains: (!config.allow_domains.is_empty()).then(|| config.allow_domains.clone()),
+            grants: session_grants.clone(),
+            budget: session_budget,
+            variables: None,
+            steps: vec![],
+        };
+        let plan_id = store
+            .save_plan(&session_plan)
+            .map_err(|e| RuntimeError::Other(format!("failed to save session plan: {e}")))?;
+        let run_id = store.create_run(&plan_id, &mode)?;
+
+        let mut logger = RunLogger::new(&config.log_dir, &run_id)
+            .map_err(|e| RuntimeError::Other(format!("failed to create run logger: {e}")))?;
+
+        let mut grant_layers: Vec<operator_core::grants::Grants> = Vec::new();
+        if let Some(ref g) = config.grants {
+            grant_layers.push(g.clone());
+        }
+        if let Some(g) = session_grants {
+            grant_layers.push(g);
+        }
+        let policy = PolicyGate::new(
+            mode.clone(),
+            config.yes_to_all,
+            config.interactive,
+            config.dry_run,
+            config.allow_apps.clone(),
+            config.allow_domains.clone(),
+            grant_layers,
+        );
+
+        store.update_run_status(&run_id, &RunStatus::Running, None)?;
+        let started = Event::new(
+            &run_id,
+            None,
+            EventType::RunStarted,
+            json!({ "plan_id": plan_id, "session": true }),
+        );
+        let _ = store.insert_event(&started);
+        let _ = logger.log_event(&started);
+
+        Ok(RunSession {
+            helper: Some(HelperClient::new(config.helper_path.clone())),
+            store,
+            config,
+            run_id,
+            plan_id,
+            policy,
+            logger,
+            step_index: 0,
+            steps_succeeded: 0,
+            steps_failed: 0,
+            policy_denied: false,
+            wall_start: Instant::now(),
+        })
+    }
+
+    /// The session's run id (a run in the store; audit rows accrue under it).
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
+
+    /// Executes one step through the full gate + secret + audit + dispatch path.
+    /// Returns the step's output JSON, or a [`SessionError`] distinguishing a
+    /// policy denial from an execution failure. Does not retry — a driver (the
+    /// model) decides whether to try again.
+    pub fn execute_step(&mut self, step: &Step) -> Result<serde_json::Value, SessionError> {
+        let idx = self.step_index as usize;
+        self.step_index += 1;
+        let params = step.params.clone();
+
+        // -- Policy gate (grants / escalation / allow-lists) ------------------
+        let decision = match self
+            .policy
+            .check_step_with_params(step, &params, idx, idx + 1)
+        {
+            Ok(d) => d,
+            Err(e) => {
+                let msg = e.to_string();
+                self.record_failure(&step.id, idx, &params, &msg);
+                self.policy_denied = true;
+                return Err(SessionError::Denied(msg));
+            }
+        };
+        match decision {
+            PolicyDecision::Allowed => {}
+            PolicyDecision::DryRun => return Ok(json!({ "dry_run": true })),
+            PolicyDecision::Denied => {
+                let msg = "step denied by policy".to_string();
+                self.record_failure(&step.id, idx, &params, &msg);
+                self.policy_denied = true;
+                return Err(SessionError::Denied(msg));
+            }
+            PolicyDecision::ConfirmationRequired => {
+                let msg = "confirmation required but session is non-interactive".to_string();
+                self.record_failure(&step.id, idx, &params, &msg);
+                self.policy_denied = true;
+                return Err(SessionError::Denied(msg));
+            }
+        }
+
+        // -- Resolve {{secret:*}} for dispatch only ---------------------------
+        let dispatch = if operator_core::secrets::has_secret_refs(&params) {
+            match operator_core::secrets::resolve_secrets(&params) {
+                Ok(p) => p,
+                Err(e) => {
+                    let msg = format!("Secret resolution failed: {e}");
+                    self.record_failure(&step.id, idx, &params, &msg);
+                    return Err(SessionError::Failed(msg));
+                }
+            }
+        } else {
+            params.clone()
+        };
+
+        // -- Record running, dispatch, record result -------------------------
+        let sr = StepResult {
+            id: ulid::Ulid::new().to_string(),
+            run_id: self.run_id.clone(),
+            step_id: step.id.clone(),
+            step_index: idx as u32,
+            status: StepStatus::Running,
+            attempt: 1,
+            started_at: Utc::now(),
+            ended_at: None,
+            input_json: params.clone(), // keeps {{secret:*}} reference form
+            output_json: None,
+            error_json: None,
+        };
+        let _ = self.store.insert_step_result(&sr);
+
+        let timeout = self.config.default_timeout_ms;
+        let result = execute_with_timeout(&step.step_type, &dispatch, &mut self.helper, timeout);
+        // Non-interactive: ELEMENT_AMBIGUOUS surfaces to the caller as an error
+        // (the model refines its selector), so no interactive disambiguation.
+        match result {
+            Ok(output) => {
+                let done = StepResult {
+                    status: StepStatus::Succeeded,
+                    ended_at: Some(Utc::now()),
+                    output_json: Some(output.clone()),
+                    ..sr
+                };
+                let _ = self.store.update_step_result(&done);
+                let ev = Event::new(
+                    &self.run_id,
+                    Some(step.id.clone()),
+                    EventType::StepFinished,
+                    json!({ "step_index": idx, "status": "succeeded" }),
+                );
+                let _ = self.store.insert_event(&ev);
+                let _ = self.logger.log_event(&ev);
+                self.steps_succeeded += 1;
+                Ok(output)
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                let done = StepResult {
+                    status: StepStatus::Failed,
+                    ended_at: Some(Utc::now()),
+                    error_json: Some(json!({ "message": msg })),
+                    ..sr
+                };
+                let _ = self.store.update_step_result(&done);
+                emit_step_failed(
+                    &self.store,
+                    &mut self.logger,
+                    &self.run_id,
+                    &step.id,
+                    idx,
+                    &msg,
+                );
+                self.steps_failed += 1;
+                Err(SessionError::Failed(msg))
+            }
+        }
+    }
+
+    fn record_failure(&mut self, step_id: &str, idx: usize, params: &serde_json::Value, msg: &str) {
+        tracing::warn!(step_id = %step_id, "{}", msg);
+        let sr = make_failed_step_result(&self.run_id, step_id, idx, params, msg);
+        let _ = self.store.insert_step_result(&sr);
+        emit_step_failed(
+            &self.store,
+            &mut self.logger,
+            &self.run_id,
+            step_id,
+            idx,
+            msg,
+        );
+        self.steps_failed += 1;
+    }
+
+    /// Finalizes the session: marks the run terminal, emits `run_finished`, and
+    /// disconnects the helper. Returns a summary of the session's steps.
+    pub fn finish(mut self) -> RunSummary {
+        let status = if self.steps_failed > 0 {
+            RunStatus::CompletedWithErrors
+        } else {
+            RunStatus::Succeeded
+        };
+        let _ = self.store.update_run_status(&self.run_id, &status, None);
+        let duration_ms = self.wall_start.elapsed().as_millis() as u64;
+        let ev = Event::new(
+            &self.run_id,
+            None,
+            EventType::RunFinished,
+            json!({
+                "status": serde_json::to_value(&status).unwrap_or_default(),
+                "steps_succeeded": self.steps_succeeded,
+                "steps_failed": self.steps_failed,
+                "duration_ms": duration_ms,
+                "session": true,
+            }),
+        );
+        let _ = self.store.insert_event(&ev);
+        let _ = self.logger.log_event(&ev);
+        if let Some(mut h) = self.helper.take() {
+            h.disconnect();
+        }
+        RunSummary {
+            run_id: self.run_id.clone(),
+            plan_id: self.plan_id.clone(),
+            status,
+            steps_total: self.steps_succeeded + self.steps_failed,
+            steps_succeeded: self.steps_succeeded,
+            steps_failed: self.steps_failed,
+            steps_skipped: 0,
+            duration_ms,
+            policy_denied: self.policy_denied,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Timeout wrapper
 // ---------------------------------------------------------------------------
 
@@ -1268,4 +1561,82 @@ fn emit_step_failed(
     );
     let _ = store.insert_event(&event);
     let _ = logger.log_event(&event);
+}
+
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+    use operator_core::grants::Grants;
+    use operator_store::Store;
+
+    fn test_config(log_dir: std::path::PathBuf, grants: Option<Grants>) -> EngineConfig {
+        EngineConfig {
+            mode: Mode::Unsafe,
+            yes_to_all: true,
+            interactive: false,
+            dry_run: false,
+            allow_apps: vec![],
+            allow_domains: vec![],
+            log_dir,
+            helper_path: None,
+            default_timeout_ms: 5000,
+            default_retries: 0,
+            default_backoff_ms: 0,
+            grants,
+            budget: None,
+        }
+    }
+
+    fn adhoc_step(id: &str, step_type: StepType, params: serde_json::Value) -> Step {
+        Step {
+            id: id.to_string(),
+            step_type,
+            params,
+            timeout_ms: None,
+            retries: None,
+            retry_backoff_ms: None,
+            on_fail: None,
+        }
+    }
+
+    #[test]
+    fn session_enforces_grants_and_audits_each_step() {
+        let dir = std::env::temp_dir().join(format!("opjack-sess-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let grant = Grants {
+            fs_write: Some(vec![format!("{}/**", dir.display())]),
+            ..Default::default()
+        };
+        let store = Store::open_in_memory().unwrap();
+        let mut session =
+            RunSession::open(store, test_config(dir.clone(), Some(grant)), None, None)
+                .expect("open session");
+
+        // Inside the fs_write grant -> allowed.
+        let inside = adhoc_step(
+            "ok",
+            StepType::SysWriteFile,
+            json!({ "path": format!("{}/ok.txt", dir.display()), "content": "hi" }),
+        );
+        assert!(session.execute_step(&inside).is_ok());
+        assert!(dir.join("ok.txt").exists());
+
+        // Outside the grant -> denied (a policy error, not an execution error).
+        let outside = adhoc_step(
+            "deny",
+            StepType::SysWriteFile,
+            json!({ "path": "/tmp/opjack-should-be-denied-xyz.txt", "content": "x" }),
+        );
+        match session.execute_step(&outside) {
+            Err(SessionError::Denied(msg)) => assert!(msg.contains("fs_write")),
+            other => panic!("expected Denied, got {other:?}"),
+        }
+
+        let summary = session.finish();
+        assert_eq!(summary.steps_succeeded, 1);
+        assert_eq!(summary.steps_failed, 1);
+        assert!(summary.policy_denied);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
