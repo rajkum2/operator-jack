@@ -57,6 +57,11 @@ pub struct PolicyGate {
     allow_domains: Vec<String>,
     /// Grant layers (config + plan). Every present layer must allow a step.
     grant_layers: Vec<Grants>,
+    /// One-shot approved-escalation allowances (M11). When a paused run is
+    /// resumed after an out-of-band approval, the escalating action is let
+    /// through exactly once per granted approval. Interior-mutable so the
+    /// `&self` check path can consume a grant.
+    escalation_grants: std::cell::Cell<usize>,
 }
 
 /// Escalate a `sys.delete_path` that would remove more than this many entries.
@@ -89,7 +94,15 @@ impl PolicyGate {
             allow_apps,
             allow_domains,
             grant_layers,
+            escalation_grants: std::cell::Cell::new(0),
         }
+    }
+
+    /// Grants one out-of-band-approved escalation (M11 resume): the next action
+    /// the always-escalate classifier would block is allowed through exactly
+    /// once. Call once per approved approval before resuming.
+    pub fn grant_one_escalation(&self) {
+        self.escalation_grants.set(self.escalation_grants.get() + 1);
     }
 
     /// Checks whether a step is allowed to run under the current policy.
@@ -146,19 +159,34 @@ impl PolicyGate {
             }
         }
 
-        // -- 2b. Always-escalate classifier (non-overridable by --yes / grants) -
-        if let Some(esc) = check_escalation(&step.step_type, params) {
-            return Err(PolicyError::EscalationRequired(esc.reason));
-        }
-        // Bulk-delete escalation needs a filesystem stat of the target.
-        if step.step_type == StepType::SysDeletePath {
-            if let Some(path) = params.get("path").and_then(|v| v.as_str()) {
-                let count = count_entries(&normalize_path(path), BULK_DELETE_THRESHOLD + 1);
-                if count > BULK_DELETE_THRESHOLD {
-                    return Err(PolicyError::EscalationRequired(format!(
-                        "sys.delete_path would remove more than {BULK_DELETE_THRESHOLD} entries under {path}"
-                    )));
+        // -- 2b. Always-escalate classifier (non-overridable by --yes / grants,
+        // except a one-shot approved-escalation grant from an M11 resume) ------
+        let escalation_reason = check_escalation(&step.step_type, params)
+            .map(|e| e.reason)
+            .or_else(|| {
+                // Bulk-delete escalation needs a filesystem stat of the target.
+                if step.step_type == StepType::SysDeletePath {
+                    if let Some(path) = params.get("path").and_then(|v| v.as_str()) {
+                        let count =
+                            count_entries(&normalize_path(path), BULK_DELETE_THRESHOLD + 1);
+                        if count > BULK_DELETE_THRESHOLD {
+                            return Some(format!(
+                                "sys.delete_path would remove more than {BULK_DELETE_THRESHOLD} entries under {path}"
+                            ));
+                        }
+                    }
                 }
+                None
+            });
+        if let Some(reason) = escalation_reason {
+            if self.escalation_grants.get() > 0 {
+                self.escalation_grants.set(self.escalation_grants.get() - 1);
+                tracing::warn!(
+                    step_type = %step.step_type,
+                    "consuming one-shot approved-escalation grant (M11 resume)"
+                );
+            } else {
+                return Err(PolicyError::EscalationRequired(reason));
             }
         }
 

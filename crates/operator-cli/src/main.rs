@@ -111,6 +111,10 @@ enum Commands {
 
         /// Inline instruction or json:{...}
         instruction: Option<String>,
+
+        /// Resume a paused plan run by its run-id (skips completed steps)
+        #[arg(long)]
+        resume: Option<String>,
     },
 
     /// Execute a natural language instruction
@@ -139,10 +143,40 @@ enum Commands {
         /// Show full JSONL log
         #[arg(long)]
         full: bool,
+
+        /// Follow the run's event log live (tail -f), like `logs --follow <run-id>`
+        #[arg(long)]
+        follow: bool,
+
+        /// Prune old runs from the store instead of viewing (retention)
+        #[arg(long)]
+        prune: bool,
+
+        /// With --prune: delete runs older than this many days (default 30)
+        #[arg(long, default_value = "30")]
+        older_than_days: i64,
+
+        /// With --prune: always keep at least this many most-recent runs (default 20)
+        #[arg(long, default_value = "20")]
+        keep: usize,
     },
 
     /// Stop a running execution
     Stop,
+
+    /// Manage pending approvals for paused runs (M11)
+    Approvals {
+        #[command(subcommand)]
+        action: ApprovalsAction,
+    },
+
+    /// Inject a steering message into a running agent (M11)
+    Steer {
+        /// The run-id of the agent to steer
+        run_id: String,
+        /// The guidance to inject at the agent's next turn
+        message: String,
+    },
 
     /// UI automation utilities
     Ui {
@@ -180,6 +214,7 @@ enum Commands {
     /// Autonomous agent (M10) — pursue a goal by observe→act→re-observe with an LLM
     Agent {
         /// The goal, e.g. "open Calculator and compute 2 + 3"
+        #[arg(default_value = "")]
         instruction: String,
         /// Maximum observe→act iterations
         #[arg(long, default_value = "15")]
@@ -190,6 +225,29 @@ enum Commands {
         /// Path to a JSON grants file bounding the session
         #[arg(long)]
         grants: Option<std::path::PathBuf>,
+        /// Resume a paused agent run by its run-id (after approving its request)
+        #[arg(long)]
+        resume: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ApprovalsAction {
+    /// List approvals (pending by default; --all for every status)
+    List {
+        /// Show approvals of every status, not just pending
+        #[arg(long)]
+        all: bool,
+    },
+    /// Approve a pending request (allows the escalating action once on resume)
+    Approve {
+        /// Approval id (from `approvals list`)
+        id: String,
+    },
+    /// Deny a pending request
+    Deny {
+        /// Approval id (from `approvals list`)
+        id: String,
     },
 }
 
@@ -353,7 +411,14 @@ fn main() -> Result<()> {
         Commands::Run {
             ref plan_file,
             ref instruction,
-        } => cmd_run(&cli, plan_file.clone(), instruction.clone()),
+            ref resume,
+        } => {
+            if let Some(run_id) = resume {
+                cmd_run_resume(&cli, run_id)
+            } else {
+                cmd_run(&cli, plan_file.clone(), instruction.clone())
+            }
+        }
         Commands::Do {
             ref instruction,
             ref provider,
@@ -366,8 +431,37 @@ fn main() -> Result<()> {
             *show_plan,
             save_plan.clone(),
         ),
-        Commands::Logs { ref run_id, full } => cmd_logs(&cli, run_id.clone(), *full),
+        Commands::Logs {
+            ref run_id,
+            full,
+            follow,
+            prune,
+            older_than_days,
+            keep,
+        } => {
+            // Accept `logs prune` / `logs follow` as verbs (first positional), in
+            // addition to the `--prune` / `--follow` flags.
+            let verb = run_id.as_deref();
+            if *prune || verb == Some("prune") {
+                cmd_logs_prune(&cli, *older_than_days, *keep)
+            } else if verb == Some("follow") {
+                cmd_logs_follow(&cli, None)
+            } else if *follow {
+                cmd_logs_follow(&cli, run_id.clone())
+            } else {
+                cmd_logs(&cli, run_id.clone(), *full)
+            }
+        }
         Commands::Stop => cmd_stop(&cli),
+        Commands::Approvals { ref action } => match action {
+            ApprovalsAction::List { all } => cmd_approvals_list(&cli, *all),
+            ApprovalsAction::Approve { id } => cmd_approvals_decide(&cli, id, true),
+            ApprovalsAction::Deny { id } => cmd_approvals_decide(&cli, id, false),
+        },
+        Commands::Steer {
+            ref run_id,
+            ref message,
+        } => cmd_steer(&cli, run_id, message),
         Commands::Ui { ref action } => match action {
             UiAction::Inspect { ref app, depth } => cmd_ui_inspect(&cli, app, *depth),
         },
@@ -403,12 +497,14 @@ fn main() -> Result<()> {
             max_iters,
             ref provider,
             ref grants,
+            ref resume,
         } => cmd_agent(
             &cli,
             instruction,
             *max_iters,
             provider.clone(),
             grants.as_deref(),
+            resume.as_deref(),
         ),
     }
 }
@@ -421,13 +517,19 @@ fn main() -> Result<()> {
 /// executed through a gated `RunSession`, observing results until done or the
 /// iteration budget is hit. Like MCP mode, it auto-approves confirmations and
 /// relies on the grant envelope + escalation classifier for safety.
+#[allow(clippy::too_many_arguments)]
 fn cmd_agent(
     cli: &Cli,
     instruction: &str,
     max_iters: usize,
     provider_override: Option<String>,
     grants_file: Option<&Path>,
+    resume: Option<&str>,
 ) -> Result<()> {
+    if let Some(run_id) = resume {
+        return cmd_agent_resume(cli, run_id, max_iters, provider_override);
+    }
+
     use operator_core::grants::Grants;
     use operator_planner::{Planner, ProviderType};
 
@@ -474,27 +576,160 @@ fn cmd_agent(
     print_grant_preview(session_grants.as_ref());
 
     let store = open_store()?;
-    let mut session =
-        operator_runtime::engine::RunSession::open(store, config, session_grants, None)
-            .map_err(|e| anyhow::anyhow!("failed to open agent session: {e}"))?;
-    let run_id = session.run_id().to_string();
+    let session = operator_runtime::engine::RunSession::open(store, config, session_grants, None)
+        .map_err(|e| anyhow::anyhow!("failed to open agent session: {e}"))?;
 
+    drive_agent(
+        cli,
+        provider.as_ref(),
+        session,
+        instruction,
+        max_iters,
+        Vec::new(),
+    )
+}
+
+/// Resumes a paused agent run: verifies its approval was granted, re-opens a
+/// session under the same grant envelope (with a one-shot escalation allowance
+/// if the pause was an escalation), re-seeds the model with the saved
+/// transcript, and continues the loop.
+fn cmd_agent_resume(
+    cli: &Cli,
+    run_id: &str,
+    max_iters: usize,
+    provider_override: Option<String>,
+) -> Result<()> {
+    use operator_core::types::{ApprovalKind, ApprovalStatus, CheckpointKind};
+    use operator_planner::{Planner, ProviderType};
+
+    let store = open_store()?;
+    let cp = store
+        .load_checkpoint(run_id)
+        .context("failed to read checkpoint")?
+        .ok_or_else(|| {
+            anyhow::anyhow!("no paused run with id {run_id} (no checkpoint on record)")
+        })?;
+    if cp.kind != CheckpointKind::Agent {
+        bail!("run {run_id} is a plan run — resume it with `operator-jack run --resume {run_id}`");
+    }
+
+    // Gate on the approval decision.
+    let approval = store
+        .latest_approval_for_run(run_id)
+        .context("failed to read approvals")?
+        .ok_or_else(|| anyhow::anyhow!("no approval on record for run {run_id}"))?;
+    match approval.status {
+        ApprovalStatus::Pending => bail!(
+            "run {run_id} is still awaiting approval — run `operator-jack approvals approve {}` first",
+            approval.id
+        ),
+        ApprovalStatus::Denied => bail!("the approval for run {run_id} was denied; not resuming"),
+        ApprovalStatus::Approved => {}
+    }
+
+    // Rebuild the session envelope from the paused run's plan row.
+    let old_run = store.get_run(run_id).context("failed to load paused run")?;
+    let (_pid, old_plan) = store
+        .get_plan(&old_run.plan_id)
+        .context("failed to load paused run's plan")?;
+
+    let cfg = OperatorConfig::load().unwrap_or_default();
+    let planner = Planner::new(build_planner_config(&cfg));
+    let provider_type = match provider_override {
+        Some(p) => p
+            .parse::<ProviderType>()
+            .map_err(|e| anyhow::anyhow!("{e}"))?,
+        None => planner
+            .first_available_provider()
+            .unwrap_or(ProviderType::Ollama),
+    };
+    let provider = planner
+        .create_provider(provider_type)
+        .map_err(|e| anyhow::anyhow!("failed to initialize provider: {e}"))?;
+
+    let mut config = build_engine_config(cli)?;
+    config.yes_to_all = true;
+    config.interactive = false;
+    if let Some(mode) = old_plan.mode.clone() {
+        config.mode = mode;
+    }
+    config.grants = None;
+
+    let goal = cp.goal.clone().unwrap_or_default();
+    let transcript = cp.transcript.clone().unwrap_or_default();
+
+    eprintln!("operator-jack agent — resuming run {run_id}");
+    eprintln!("Provider: {}", provider_type.display_name());
+    print_grant_preview(old_plan.grants.as_ref());
+
+    let store2 = open_store()?;
+    let session =
+        operator_runtime::engine::RunSession::open(store2, config, old_plan.grants.clone(), None)
+            .map_err(|e| anyhow::anyhow!("failed to open resume session: {e}"))?;
+
+    // A one-shot escalation allowance so the approved action goes through once.
+    if approval.kind == ApprovalKind::Escalation {
+        session.grant_one_escalation();
+    }
+
+    // Consume the checkpoint so the same pause can't be resumed twice.
+    let _ = store.delete_checkpoint(run_id);
+
+    drive_agent(
+        cli,
+        provider.as_ref(),
+        session,
+        &goal,
+        max_iters,
+        transcript,
+    )
+}
+
+/// Shared agent driver used by both fresh runs and resumes: writes the PID file,
+/// runs the supervised loop, and either abandons (if paused) or finishes the
+/// session, then prints the outcome.
+fn drive_agent(
+    cli: &Cli,
+    provider: &dyn operator_planner::provider::LlmProvider,
+    mut session: operator_runtime::engine::RunSession,
+    goal: &str,
+    max_iters: usize,
+    initial_transcript: Vec<String>,
+) -> Result<()> {
+    use operator_agent::AgentStatus;
+
+    let run_id = session.run_id().to_string();
     let data_dir = resolve_data_dir();
     let _ = write_pid_file(&data_dir, &run_id);
 
-    let outcome =
-        operator_agent::run_agent(instruction, provider.as_ref(), &mut session, max_iters);
-    let summary = session.finish();
+    let mut supervisor = CliSupervisor::new(resolve_log_dir());
+    let outcome = operator_agent::run_agent_supervised(
+        goal,
+        provider,
+        &mut session,
+        max_iters,
+        &mut supervisor,
+        initial_transcript,
+    );
+
+    // On pause the supervisor has already set status=Paused and checkpointed;
+    // don't overwrite it with a terminal status.
+    let paused = outcome.status == AgentStatus::Paused;
+    let steps_total = if paused {
+        session.abandon();
+        0
+    } else {
+        session.finish().steps_total
+    };
     let _ = remove_pid_file(&data_dir);
 
     if cli.json {
-        let status = format!("{:?}", outcome.status);
         let obj = serde_json::json!({
             "run_id": run_id,
-            "status": status,
+            "status": format!("{:?}", outcome.status),
             "iterations": outcome.iterations,
             "summary": outcome.summary,
-            "steps": summary.steps_total,
+            "steps": steps_total,
         });
         println!("{}", serde_json::to_string_pretty(&obj)?);
     } else {
@@ -502,12 +737,348 @@ fn cmd_agent(
         println!("Agent finished: {:?}", outcome.status);
         println!("  Iterations: {}", outcome.iterations);
         println!("  Summary:    {}", outcome.summary);
+        println!("  Run:        {run_id}");
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// CliSupervisor — store-backed AgentSupervisor (M11)
+// ---------------------------------------------------------------------------
+
+/// The CLI's implementation of the agent supervisor: persists pause checkpoints
+/// and approvals to the store, drains steer messages from a per-run file, and
+/// raises a macOS notification on pause.
+struct CliSupervisor {
+    store: Store,
+    log_dir: PathBuf,
+}
+
+impl CliSupervisor {
+    fn new(log_dir: PathBuf) -> Self {
+        // A dedicated store connection (the session owns its own); both point at
+        // the same WAL database.
+        let store = open_store().expect("failed to open supervisor store");
+        Self { store, log_dir }
+    }
+
+    fn steer_path(&self, run_id: &str) -> PathBuf {
+        self.log_dir.join(format!("{run_id}.steer"))
+    }
+}
+
+impl operator_agent::AgentSupervisor for CliSupervisor {
+    fn pause(
+        &mut self,
+        run_id: &str,
+        kind: operator_agent::PauseKind,
+        cp: &operator_agent::AgentCheckpoint,
+    ) -> String {
+        use operator_core::types::{ApprovalKind, Checkpoint, CheckpointKind};
+
+        let plan_id = self
+            .store
+            .get_run(run_id)
+            .map(|r| r.plan_id)
+            .unwrap_or_default();
+        let checkpoint = Checkpoint {
+            run_id: run_id.to_string(),
+            plan_id,
+            kind: CheckpointKind::Agent,
+            cursor: serde_json::json!({ "iteration": cp.iteration }),
+            variables: None,
+            transcript: Some(cp.transcript.to_vec()),
+            goal: Some(cp.goal.to_string()),
+            reason: cp.reason.to_string(),
+        };
+        let _ = self.store.save_checkpoint(&checkpoint);
+        let akind = match kind {
+            operator_agent::PauseKind::Escalation => ApprovalKind::Escalation,
+            operator_agent::PauseKind::Takeover => ApprovalKind::Takeover,
+        };
+        let id = self
+            .store
+            .create_approval(run_id, akind, cp.reason)
+            .unwrap_or_default();
+        let _ = self
+            .store
+            .update_run_status(run_id, &RunStatus::Paused, None);
+        id
+    }
+
+    fn poll_steer(&mut self, run_id: &str) -> Vec<String> {
+        let path = self.steer_path(run_id);
+        let Ok(contents) = fs::read_to_string(&path) else {
+            return Vec::new();
+        };
+        if contents.trim().is_empty() {
+            return Vec::new();
+        }
+        // Drain: truncate the file so each message is injected exactly once.
+        let _ = fs::write(&path, "");
+        contents
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn notify(&self, title: &str, body: &str) {
+        notify_user(title, body);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Approvals + steering + retention (M11)
+// ---------------------------------------------------------------------------
+
+/// Lists approvals (pending by default; `--all` for every status).
+fn cmd_approvals_list(cli: &Cli, all: bool) -> Result<()> {
+    use operator_core::types::ApprovalStatus;
+
+    let store = open_store()?;
+    let filter = if all {
+        None
+    } else {
+        Some(ApprovalStatus::Pending)
+    };
+    let approvals = store
+        .list_approvals(filter)
+        .context("failed to list approvals")?;
+
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(&approvals)?);
+        return Ok(());
+    }
+
+    if approvals.is_empty() {
+        println!("No {} approvals.", if all { "recorded" } else { "pending" });
+        return Ok(());
+    }
+
+    println!(
+        "{:<28}  {:<10}  {:<10}  REASON",
+        "APPROVAL ID", "KIND", "STATUS"
+    );
+    for a in &approvals {
         println!(
-            "  Run:        {run_id} ({} steps executed)",
-            summary.steps_total
+            "{:<28}  {:<10}  {:<10}  {}",
+            a.id,
+            format!("{:?}", a.kind).to_lowercase(),
+            format!("{:?}", a.status).to_lowercase(),
+            truncate_str(&a.summary, 60),
+        );
+    }
+    println!();
+    println!("Approve with:  operator-jack approvals approve <id>");
+    println!("Then resume:   operator-jack agent --resume <run-id>   (run-id shown in the pause message)");
+    Ok(())
+}
+
+/// Approves or denies a pending approval.
+fn cmd_approvals_decide(cli: &Cli, id: &str, approve: bool) -> Result<()> {
+    use operator_core::types::ApprovalStatus;
+
+    let store = open_store()?;
+    let existing = store
+        .get_approval(id)
+        .context("failed to read approval")?
+        .ok_or_else(|| anyhow::anyhow!("no approval with id {id}"))?;
+    if existing.status != ApprovalStatus::Pending {
+        bail!(
+            "approval {id} is already {:?} — nothing to do",
+            existing.status
+        );
+    }
+
+    let new_status = if approve {
+        ApprovalStatus::Approved
+    } else {
+        ApprovalStatus::Denied
+    };
+    store
+        .decide_approval(id, new_status)
+        .context("failed to update approval")?;
+
+    if cli.json {
+        let obj = serde_json::json!({
+            "id": id,
+            "run_id": existing.run_id,
+            "status": if approve { "approved" } else { "denied" },
+        });
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+    } else if approve {
+        println!("Approved {id}.");
+        println!(
+            "Resume the run with:  operator-jack agent --resume {}",
+            existing.run_id
+        );
+    } else {
+        println!("Denied {id}. The paused run will not resume.");
+    }
+    Ok(())
+}
+
+/// Injects a steering message into a running agent: appends to a per-run file
+/// the agent drains at the start of its next turn.
+fn cmd_steer(cli: &Cli, run_id: &str, message: &str) -> Result<()> {
+    use std::io::Write as _;
+
+    let path = resolve_log_dir().join(format!("{run_id}.steer"));
+    let mut f = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("failed to open steer file {}", path.display()))?;
+    writeln!(f, "{}", message.replace('\n', " "))
+        .with_context(|| "failed to write steer message")?;
+
+    if cli.json {
+        println!(
+            "{}",
+            serde_json::json!({ "run_id": run_id, "queued": message })
+        );
+    } else {
+        println!("Steering message queued for run {run_id}; it will be injected at the next turn.");
+    }
+    Ok(())
+}
+
+/// Prunes old runs from the store (retention). Deletes runs older than
+/// `older_than_days`, always keeping at least `keep` of the most recent.
+fn cmd_logs_prune(cli: &Cli, older_than_days: i64, keep: usize) -> Result<()> {
+    let store = open_store()?;
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(older_than_days.max(0));
+    let pruned = store
+        .prune_runs(cutoff, keep)
+        .context("failed to prune runs")?;
+
+    if cli.json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "pruned": pruned,
+                "older_than_days": older_than_days,
+                "kept_min": keep,
+            })
+        );
+    } else {
+        println!(
+            "Pruned {pruned} run(s) older than {older_than_days} day(s) (kept the {keep} most recent)."
         );
     }
     Ok(())
+}
+
+/// Follows a run's event log live (tail -f). Resolves the newest run if no id is
+/// given, prints existing lines, then polls for new ones until interrupted or
+/// the run reaches a terminal status.
+fn cmd_logs_follow(_cli: &Cli, run_id: Option<String>) -> Result<()> {
+    let log_dir = resolve_log_dir();
+    let store = open_store()?;
+
+    let rid = match run_id {
+        Some(r) => r,
+        None => store
+            .list_runs(1)
+            .ok()
+            .and_then(|runs| runs.into_iter().next())
+            .map(|r| r.id)
+            .ok_or_else(|| anyhow::anyhow!("no runs found to follow"))?,
+    };
+    let log_path = log_dir.join(format!("{rid}.jsonl"));
+
+    // Trap Ctrl-C so following stops cleanly.
+    let stop = Arc::new(AtomicBool::new(false));
+    let _ = set_ctrlc_handler(Arc::clone(&stop));
+
+    eprintln!("Following run {rid} (Ctrl-C to stop)…");
+    let mut pos: u64 = 0;
+    let mut missing_ticks = 0;
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        match fs::File::open(&log_path) {
+            Ok(mut f) => {
+                use std::io::{Read, Seek, SeekFrom};
+                let _ = f.seek(SeekFrom::Start(pos));
+                let mut buf = String::new();
+                if f.read_to_string(&mut buf).is_ok() && !buf.is_empty() {
+                    pos += buf.len() as u64;
+                    for line in buf.lines() {
+                        print_log_event_line(line);
+                    }
+                }
+            }
+            Err(_) => {
+                missing_ticks += 1;
+                if missing_ticks > 20 {
+                    eprintln!("(no log file for run {rid} yet: {})", log_path.display());
+                    missing_ticks = 0;
+                }
+            }
+        }
+        // Stop once the run is terminal and we've drained the file.
+        if let Ok(run) = store.get_run(&rid) {
+            if is_terminal_status(&run.status) {
+                // One last drain already happened above.
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(400));
+    }
+    Ok(())
+}
+
+/// True if a run status is terminal (won't produce more events).
+fn is_terminal_status(status: &RunStatus) -> bool {
+    matches!(
+        status,
+        RunStatus::Succeeded
+            | RunStatus::CompletedWithErrors
+            | RunStatus::Failed
+            | RunStatus::Cancelled
+            | RunStatus::Partial
+    )
+}
+
+/// Pretty-prints one JSONL event line for `logs --follow`.
+fn print_log_event_line(line: &str) {
+    let line = line.trim();
+    if line.is_empty() {
+        return;
+    }
+    match serde_json::from_str::<serde_json::Value>(line) {
+        Ok(v) => {
+            let ts = v.get("ts").and_then(|t| t.as_str()).unwrap_or("");
+            let etype = v
+                .get("event_type")
+                .and_then(|t| t.as_str())
+                .unwrap_or("event");
+            let payload = v
+                .get("payload_json")
+                .or_else(|| v.get("payload"))
+                .map(|p| p.to_string())
+                .unwrap_or_default();
+            println!("{ts}  {etype}  {}", truncate_str(&payload, 120));
+        }
+        Err(_) => println!("{line}"),
+    }
+}
+
+/// Raises a macOS notification via `osascript` (best-effort; ignored on failure
+/// or non-macOS).
+fn notify_user(title: &str, body: &str) {
+    // Escape double quotes for the AppleScript string literals.
+    let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+    let script = format!(
+        "display notification \"{}\" with title \"{}\"",
+        esc(body),
+        esc(title)
+    );
+    let _ = Command::new("osascript").arg("-e").arg(script).output();
 }
 
 // ---------------------------------------------------------------------------
@@ -977,6 +1548,7 @@ fn cmd_exec(cli: &Cli, plan_id: &str) -> Result<()> {
     match result {
         Ok(summary) => {
             print_run_summary(cli, &summary);
+            print_pause_hint_if_paused(&open_store()?, &summary);
             let code = exit_code_for_summary(&summary);
             if code != 0 {
                 std::process::exit(code);
@@ -992,6 +1564,119 @@ fn cmd_exec(cli: &Cli, plan_id: &str) -> Result<()> {
             }
             std::process::exit(1);
         }
+    }
+}
+
+/// Resumes a paused PLAN run (M11): verifies its approval, then re-executes the
+/// plan skipping already-completed steps (with a one-shot escalation allowance
+/// if the pause was an escalation).
+fn cmd_run_resume(cli: &Cli, run_id: &str) -> Result<()> {
+    use operator_core::types::{ApprovalKind, ApprovalStatus, CheckpointKind};
+    use operator_runtime::engine::ResumeState;
+
+    let store = open_store()?;
+    let cp = store
+        .load_checkpoint(run_id)
+        .context("failed to read checkpoint")?
+        .ok_or_else(|| {
+            anyhow::anyhow!("no paused run with id {run_id} (no checkpoint on record)")
+        })?;
+    if cp.kind != CheckpointKind::Plan {
+        bail!(
+            "run {run_id} is an agent run — resume it with `operator-jack agent --resume {run_id}`"
+        );
+    }
+
+    let approval = store
+        .latest_approval_for_run(run_id)
+        .context("failed to read approvals")?
+        .ok_or_else(|| anyhow::anyhow!("no approval on record for run {run_id}"))?;
+    match approval.status {
+        ApprovalStatus::Pending => bail!(
+            "run {run_id} is still awaiting approval — run `operator-jack approvals approve {}` first",
+            approval.id
+        ),
+        ApprovalStatus::Denied => bail!("the approval for run {run_id} was denied; not resuming"),
+        ApprovalStatus::Approved => {}
+    }
+
+    let old_run = store.get_run(run_id).context("failed to load paused run")?;
+    let cursor = cp
+        .cursor
+        .get("step_index")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as usize;
+    let variables: std::collections::HashMap<String, serde_json::Value> = cp
+        .variables
+        .as_ref()
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    let config = build_engine_config(cli)?;
+    let data_dir = resolve_data_dir();
+    let store2 = open_store()?;
+    let mut engine = Engine::new(store2, config);
+    engine.resume_next(ResumeState {
+        cursor,
+        variables,
+        grant_escalation: approval.kind == ApprovalKind::Escalation,
+    });
+
+    let cancel_flag: Arc<AtomicBool> = engine.cancel_flag();
+    let _ = set_ctrlc_handler(Arc::clone(&cancel_flag));
+    let data_dir_clone = data_dir.clone();
+    engine.set_on_run_created(move |rid| {
+        let _ = write_pid_file(&data_dir_clone, rid);
+    });
+
+    eprintln!("Resuming plan run {run_id} from step {cursor}…");
+    let result = engine.execute_plan(&old_run.plan_id);
+    let _ = remove_pid_file(&data_dir);
+
+    // Consume the old checkpoint so the same pause can't be resumed twice.
+    let _ = store.delete_checkpoint(run_id);
+
+    match result {
+        Ok(summary) => {
+            print_run_summary(cli, &summary);
+            print_pause_hint_if_paused(&store, &summary);
+            let code = exit_code_for_summary(&summary);
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
+        Err(e) => {
+            if cli.json {
+                println!("{}", serde_json::json!({ "error": e.to_string() }));
+            } else {
+                eprintln!("Resume failed: {}", e);
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+/// If a plan run paused, prints the pending approval id + resume command and
+/// raises a notification (M11 supervision DX).
+fn print_pause_hint_if_paused(store: &Store, summary: &RunSummary) {
+    if summary.status != RunStatus::Paused {
+        return;
+    }
+    let approval = store
+        .latest_approval_for_run(&summary.run_id)
+        .ok()
+        .flatten();
+    let reason = approval
+        .as_ref()
+        .map(|a| a.summary.clone())
+        .unwrap_or_else(|| "human input required".to_string());
+    notify_user("Operator Jack: run paused", &reason);
+    if let Some(a) = approval {
+        eprintln!();
+        eprintln!("⏸  Run paused: {reason}");
+        eprintln!("   Approve:  operator-jack approvals approve {}", a.id);
+        eprintln!("   Resume:   operator-jack run --resume {}", summary.run_id);
     }
 }
 
@@ -1085,6 +1770,7 @@ fn cmd_run(cli: &Cli, plan_file: Option<PathBuf>, instruction: Option<String>) -
     match result {
         Ok(summary) => {
             print_run_summary(cli, &summary);
+            print_pause_hint_if_paused(&open_store()?, &summary);
             let code = exit_code_for_summary(&summary);
             if code != 0 {
                 std::process::exit(code);
@@ -1308,6 +1994,7 @@ fn cmd_do(
     match result {
         Ok(summary) => {
             print_run_summary(cli, &summary);
+            print_pause_hint_if_paused(&open_store()?, &summary);
             let code = exit_code_for_summary(&summary);
             if code != 0 {
                 std::process::exit(code);
@@ -1873,9 +2560,11 @@ fn exit_code_for_summary(summary: &RunSummary) -> i32 {
         RunStatus::Failed => 1,
         RunStatus::CompletedWithErrors => 1,
         RunStatus::Cancelled => 5,
-        // Stopped early for a non-error reason (budget/escalation): distinct
-        // from success and from a step error.
+        // Stopped early for a non-error reason (budget): distinct from success
+        // and from a step error.
         RunStatus::Partial => 7,
+        // Paused awaiting approval/takeover — a clean, resumable stop (exit 0).
+        RunStatus::Paused => 0,
         RunStatus::Queued | RunStatus::Running => 0,
     }
 }
@@ -2350,6 +3039,7 @@ fn cmd_skill_run(cli: &Cli, skill_name: &str, params: &[(String, String)]) -> Re
     match result {
         Ok(summary) => {
             print_run_summary(cli, &summary);
+            print_pause_hint_if_paused(&open_store()?, &summary);
             let code = exit_code_for_summary(&summary);
             if code != 0 {
                 std::process::exit(code);

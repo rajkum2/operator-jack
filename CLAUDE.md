@@ -21,7 +21,7 @@ export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 # Build Rust workspace
 cd /Users/kirankumaralugonda/operator-jack && cargo build
 
-# Run Rust tests (146 tests)
+# Run Rust tests (152 tests)
 cargo test
 
 # Build Swift helper and run Swift tests (10 tests)
@@ -82,6 +82,7 @@ operator-jack/
 - **System lane** (`sys.*`): Rust-native, runs on worker thread with timeout
 - **UI lane** (`ui.*`): Dispatched to Swift helper via NDJSON IPC
 - **Browser lane** (`browser.*`): Implemented (M5) via CDP, but reachable ONLY through the `browser` CLI subcommands (doctor/launch/navigate/screenshot). Browser steps in plans are NOT yet wired into the engine — a plan containing `browser.*` steps fails validation today (expected). Plan-lane wiring is milestone M12 in MASTER_PLAN.md.
+- **Control lane** (`ui.human_takeover`): Rust-native pause request (M11), not dispatched to any helper. An interactive run blocks for Enter; a non-interactive run pauses (checkpoint + approval) for out-of-band resume; the agent loop can emit it. Risk Low.
 
 ### Error Handling
 - Rust: `thiserror` for library crates, `anyhow` for CLI
@@ -111,7 +112,7 @@ operator-jack/
 - `path` is a real matcher: suffix match on the computed traversal path (implemented in M7; was rejected-when-alone in Phase B)
 
 ### Testing
-- Rust: `cargo test` — unit tests in each crate's source files (146 tests)
+- Rust: `cargo test` — unit tests in each crate's source files (152 tests)
 - Swift: `cd macos-helper && swift test` — XCTest target at `Tests/OperatorMacOSHelperTests/` (10 tests; selector parsing + criteria). AX-dependent behavior is covered by the live acceptance harness.
 - Acceptance: `make check-examples` validates every golden plan in `docs/examples/` and dry-run-expands every skill. **No example or skill ships without passing it.** Run a plan live via `operator-jack run --plan-file <path> --mode unsafe --yes`.
 
@@ -145,7 +146,8 @@ operator-jack/
 | M8 | DONE | Safety envelope: task-scoped grants (fs/exec/domains), run budgets + Partial status, always-escalate classifier, secure-field refusal, redaction hardening, exit code 3, Keychain secret store (`{{secret:name}}` injection, `secret` CLI) |
 | M9 | DONE | MCP server mode: RunSession (ad-hoc gated single-step exec), operator-mcp crate (JSON-RPC-over-stdio, 15 tools), `operator-jack mcp serve --grants`, session-as-run audit |
 | M10 | DONE | Native agent loop: operator-agent crate (observe→propose one JSON action→execute via RunSession→re-observe), provider `chat()`, `operator-jack agent` CLI |
-| M11-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md (M11=long-horizon/supervision, M12=web autonomy, M13=hands+control flow, M14=native macOS lane, M15=trust/residency) |
+| M11 | DONE | Long-horizon & supervision (pause/resume, approvals, human_takeover, steer, logs --follow/prune) |
+| M12-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md (M12=web autonomy, M13=hands+control flow, M14=native macOS lane, M15=trust/residency) |
 
 ## Important Rules
 
@@ -196,10 +198,13 @@ operator-jack do "..." --save-plan plan.json      # Save generated plan
 operator-jack doctor                    # Environment health check
 operator-jack run --plan-file <path>    # Validate + execute a plan
 operator-jack run 'json:{...}'         # Inline plan execution
+operator-jack run --resume <run-id>     # Resume a paused run (approval required; skips completed steps)
 operator-jack exec <plan-id>           # Execute a saved plan
 operator-jack plan validate --plan-file <path>
 operator-jack plan save --plan-file <path>
 operator-jack logs [run-id] [--full]
+operator-jack logs --follow [run-id]    # Tail a run's JSONL live (also: logs follow)
+operator-jack logs prune [--older-than-days N] [--keep M]   # Delete old runs (cascades; also: logs --prune)
 operator-jack stop
 operator-jack ui inspect --app <name> [--depth N]
 operator-jack init                      # Create config file
@@ -243,6 +248,7 @@ as plan execution. The effective grant envelope is printed to STDERR before serv
 ### Agent (M10)
 ```
 operator-jack agent "<goal>" [--max-iters N] [--provider P] [--grants <file>]
+operator-jack agent --resume <run-id>            # Resume a paused agent run (approval required)
 ```
 Runs the native autonomous agent loop: observe (`ui.snapshot`) → the model proposes ONE
 JSON action → execute it through a `RunSession` (same policy gate, grants, escalation
@@ -253,6 +259,20 @@ select_menu, read_text, wait_for, read_file, write_file, exec. Autonomous and no
 (auto-approves confirmations; safety comes from the grant envelope + escalation classifier +
 secure-field refusal). Prints the effective grant envelope first; the whole run is one
 session-run in the store and every executed action is audited.
+
+### Supervision (M11)
+```
+operator-jack approvals list [--all]         # List pending approvals (or all with --all)
+operator-jack approvals approve <id>         # Approve a paused run's escalation/takeover
+operator-jack approvals deny <id>            # Deny it
+operator-jack steer <run-id> "<message>"     # Inject guidance into a running agent's next turn
+```
+When the always-escalate classifier flags an action (or a plan/agent hits `ui.human_takeover`),
+the run checkpoints, opens a pending approval, posts a macOS notification, and ends `Paused`
+(exit code 0) instead of hard-failing. Approve it, then `run --resume` / `agent --resume` the
+run-id to continue (resume verifies the approval is granted and consumes a one-shot escalation
+allowance). `logs prune` bounds store growth by deleting old runs and cascading to their
+step_results/events/checkpoints/approvals.
 
 ## Common Flags
 

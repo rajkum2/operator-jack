@@ -197,6 +197,8 @@ pub fn validate_step_params(
         StepType::UiSnapshot => require_string_param(params, "app"),
         // ui.screenshot: `app` is optional (omit to capture the main display).
         StepType::UiScreenshot => Ok(()),
+        // ui.human_takeover: all params optional (`prompt`, `wait_for`).
+        StepType::UiHumanTakeover => Ok(()),
         // Browser lane
         StepType::BrowserNavigate => require_string_param(params, "url"),
         StepType::BrowserClick => require_string_param(params, "selector"),

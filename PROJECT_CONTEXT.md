@@ -9,7 +9,7 @@
 ## Quick Start (For New Session)
 
 1. Read this file completely
-2. Read the roadmap: `MASTER_PLAN.md` (authoritative, M7-M15). Newest spec: `SPEC_FREEZE_V0.10.md` (M10 native agent loop); prior: `SPEC_FREEZE_V0.9.md` (M9 MCP server mode), `SPEC_FREEZE_V0.8.md` (M8 safety envelope), `SPEC_FREEZE_V0.7.md` (M7 perception), `SPEC_FREEZE_V0.6.md` (M5 browser), `SPEC_FREEZE_V0.5.md` (M6 skills, retroactive); base contract: `SPEC_FREEZE_V0.2.md`
+2. Read the roadmap: `MASTER_PLAN.md` (authoritative, M7-M15). Newest spec: `SPEC_FREEZE_V0.11.md` (M11 long-horizon & supervision); prior: `SPEC_FREEZE_V0.10.md` (M10 native agent loop), `SPEC_FREEZE_V0.9.md` (M9 MCP server mode), `SPEC_FREEZE_V0.8.md` (M8 safety envelope), `SPEC_FREEZE_V0.7.md` (M7 perception), `SPEC_FREEZE_V0.6.md` (M5 browser), `SPEC_FREEZE_V0.5.md` (M6 skills, retroactive); base contract: `SPEC_FREEZE_V0.2.md`
 3. Check `VERSION_LOG` below for what changed last
 4. Check `CURRENT_STATE` below for what's built vs pending
 5. Check `NEXT_ACTIONS` for what to do next
@@ -34,6 +34,7 @@
 |------|---------|
 | `PROJECT_CONTEXT.md` | THIS FILE — resume context, version log, state tracker |
 | `MASTER_PLAN.md` | Authoritative forward roadmap (M7-M15) |
+| `SPEC_FREEZE_V0.11.md` | M11 spec — long-horizon & supervision (Paused status, checkpoint/approval tables, ui.human_takeover, resume, logs --follow/prune) |
 | `SPEC_FREEZE_V0.10.md` | M10 spec — native agent loop (provider `chat`, observe→propose→execute→re-observe, agent mode semantics) |
 | `SPEC_FREEZE_V0.9.md` | M9 spec — MCP server mode (RunSession, mcp serve, 15-tool surface over JSON-RPC-over-stdio) |
 | `SPEC_FREEZE_V0.8.md` | M8 spec — safety envelope (grants, budgets + Partial status, escalation classifier, redaction hardening) |
@@ -83,6 +84,20 @@
 ---
 
 ## VERSION_LOG
+
+### v0.12.0 — 2026-07-09
+**Status:** M11 COMPLETE. Long-horizon autonomy & supervision — runs now pause, survive process exit, and resume after human approval; plus live supervision (follow, steer), pause notifications, transcript compaction, kill-switch hardening, and audit-log pruning. Crate count unchanged at 11. 152 Rust tests + 10 Swift tests pass.
+**Changes:**
+1. **Pause/resume infrastructure** — a new non-terminal run status `RunStatus::Paused` (resumable, exit code 0) and two SQLite tables (migration #2): `checkpoints` (one per run: cursor, variables, agent transcript, goal, reason) and `approvals` (id, run_id, kind escalation|takeover, status pending|approved|denied). New store methods: save/load/delete_checkpoint, create_approval, list_approvals, get_approval, latest_approval_for_run, decide_approval, prune_runs.
+2. **Escalation → pause** (replaces M8's interim clean-fail): when the always-escalate classifier flags an action, the run checkpoints, opens a pending approval, posts a macOS notification, and ends `Paused` (exit 0) instead of hard-failing. Resume consumes a one-shot escalation allowance (`PolicyGate::grant_one_escalation`). MCP still surfaces escalation as a tool error (it has no run loop).
+3. **`ui.human_takeover` step** — a new control-lane step type (risk Low): an interactive plan run blocks for Enter; a non-interactive run pauses for out-of-band resume; the agent loop can emit it as a control action. The agent never types credentials or solves CAPTCHAs.
+4. **Resume**: `operator-jack agent --resume <run-id>` and `operator-jack run --resume <run-id>` — both verify the run's approval is granted, then continue (the agent re-seeds the saved transcript; a plan skips completed steps via the checkpoint cursor).
+5. **Approvals CLI**: `operator-jack approvals list [--all]`, `approvals approve <id>`, `approvals deny <id>`.
+6. **Supervision DX**: `operator-jack logs --follow [<run-id>]` (tail per-run JSONL; also `logs follow`) and `operator-jack steer <run-id> "<message>"` (inject guidance into a running agent's next turn); macOS notifications on pause. **Context compaction**: long agent transcripts (> ~24k chars) fold their oldest turns into a summary breadcrumb, keeping recent turns verbatim.
+7. **Retention/pruning**: `operator-jack logs prune [--older-than-days N] [--keep M]` (also `logs --prune`) deletes old runs and cascades to step_results/events/checkpoints/approvals — fixes the audit's unbounded-growth finding.
+8. **Kill-switch hardening**: SIGINT/SIGTERM sets the cancel flag; the engine always writes a terminal `Cancelled` status + `RunCancelled` event and disconnects the helper.
+9. Version bumped to 0.12.0 (workspace + Swift `helperVersion`). Created `SPEC_FREEZE_V0.11.md` (M11 long-horizon & supervision spec).
+10. **Verified live**: a plan with a `ui.human_takeover` step paused non-interactively (checkpoint + approval written, exit 0), refused `--resume` before approval, and completed after `approvals approve` + `--resume`; `logs prune` reclaimed 82 runs. Full gate green: `cargo fmt` clean, `cargo clippy -D warnings` clean, 152 Rust tests, 10 Swift tests, `check-examples.sh` all valid.
 
 ### v0.11.0 — 2026-07-09
 **Status:** M10 COMPLETE. Native agent loop — Operator Jack drives *itself*: observe → propose ONE JSON action → execute through a `RunSession` → re-observe, until the model signals `done`, `--max-iters` is hit, or the provider errors. The definitional autonomy feature. Workspace grows to 11 crates. 146 Rust tests + 10 Swift tests pass.
@@ -381,6 +396,16 @@
 - [x] M10 `operator-jack agent "<goal>" [--max-iters N] [--provider P] [--grants <file>]` — autonomous, non-interactive (auto-approves; relies on grant envelope + escalation classifier + secure-field refusal); prints the effective grant envelope first; one session-run, every action audited
 - [x] M10 verified live with local Ollama (`llama3.2:3b`): open_app → snapshot → click → snapshot → click on Calculator, 6 audited steps under one run
 - [x] 146 Rust tests + 10 Swift tests passing (v0.11.0)
+- [x] SPEC_FREEZE_V0.11.md (M11 long-horizon & supervision spec)
+- [x] M11 pause/resume infrastructure: new non-terminal run status `RunStatus::Paused` (resumable, exit code 0); migration #2 adds `checkpoints` (one per run: cursor, variables, agent transcript, goal, reason) + `approvals` (id, run_id, kind escalation|takeover, status pending|approved|denied); store methods save/load/delete_checkpoint, create_approval, list_approvals, get_approval, latest_approval_for_run, decide_approval, prune_runs
+- [x] M11 escalation → pause (replaces M8's interim clean-fail): the always-escalate classifier now checkpoints + opens a pending approval + posts a macOS notification + ends `Paused` (exit 0) instead of hard-failing; resume consumes a one-shot escalation allowance (`PolicyGate::grant_one_escalation`); MCP still surfaces escalation as a tool error (no run loop)
+- [x] M11 `ui.human_takeover` control-lane step (risk Low): interactive run blocks for Enter, non-interactive run pauses for out-of-band resume, the agent loop can emit it; the agent never types credentials or solves CAPTCHAs
+- [x] M11 resume: `operator-jack run --resume <run-id>` and `agent --resume <run-id>` (both verify the run's approval is granted; the agent re-seeds the saved transcript, a plan skips completed steps via the checkpoint cursor)
+- [x] M11 approvals CLI: `approvals list [--all]`, `approvals approve <id>`, `approvals deny <id>`
+- [x] M11 supervision DX: `logs --follow [<run-id>]` (tail per-run JSONL; also `logs follow`), `steer <run-id> "<message>"` (inject guidance into a running agent's next turn), macOS notifications on pause, transcript compaction (> ~24k chars folds oldest turns into a summary breadcrumb, recent turns kept verbatim)
+- [x] M11 retention/pruning: `logs prune [--older-than-days N] [--keep M]` (also `logs --prune`) deletes old runs + cascades to step_results/events/checkpoints/approvals
+- [x] M11 kill-switch hardening: SIGINT/SIGTERM sets the cancel flag; the engine always writes a terminal `Cancelled` status + `RunCancelled` event and disconnects the helper
+- [x] 152 Rust tests + 10 Swift tests passing (v0.12.0)
 
 ### Milestone Status
 
@@ -400,7 +425,8 @@
 | M8 | DONE | Safety envelope: task-scoped grants (fs/exec/domains), run budgets + `Partial` status, always-escalate classifier, secure-field refusal, redaction hardening, exit code 3, Keychain secret store (`{{secret:name}}` injection) |
 | M9 | DONE | MCP server mode: RunSession (ad-hoc gated single-step exec), operator-mcp crate (JSON-RPC-over-stdio, 15 tools), `operator-jack mcp serve --grants`, session-as-run audit; verified live grant enforcement over MCP |
 | M10 | DONE | Native agent loop: operator-agent crate (observe→propose one JSON action→execute via RunSession→re-observe), provider `chat()`, `operator-jack agent` CLI; verified live on Calculator via local Ollama |
-| M11-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md — M11 long-horizon/supervision (next), M12 web autonomy, M13 hands+control flow, M14 native macOS lane, M15 trust/residency |
+| M11 | DONE | Long-horizon autonomy & supervision: pause/resume (`RunStatus::Paused`, checkpoint + approval tables), escalation→pause, `ui.human_takeover`, `run/agent --resume`, `approvals` CLI, `logs --follow`/`steer`/notifications, context compaction, `logs prune`, kill-switch hardening; verified live |
+| M12-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md — M12 web autonomy (next), M13 hands+control flow, M14 native macOS lane, M15 trust/residency |
 
 ---
 
@@ -408,10 +434,10 @@
 
 **Immediate next steps (in order) — see MASTER_PLAN.md for full detail:**
 
-1. **M11 — Long-horizon autonomy & supervision (v0.12.0)** — pause/persist/resume, approvals, human takeover, kill-switch hardening, supervision DX (`logs --follow`, mid-run steering). Depends on M8 + M10 (both done).
-2. **M12 — Web autonomy (v0.13.0)** — browser profile isolation → plan/agent-lane wiring → real extraction; unlocks the "scrape a website, install what you need" scenario.
+1. **M12 — Web autonomy (v0.13.0)** — browser profile isolation → plan/agent-lane wiring → real extraction; unlocks the "scrape a website, install what you need" scenario. Depends on M7, M8, M10 (done); M9 tool catalog; M11 auth takeover (done).
+2. **M13 — Hands completion & deterministic control flow (v0.14.0)** — actuation verbs (scroll/right-click/double-click/hover/drag, coordinate clicks), plan schema v2 control flow (foreach/if/repeat_until with iteration caps), data/network steps (list_dir, parse_csv/json, http.request), resume-aware batches.
 
-**MASTER_PLAN.md is the authoritative roadmap for M7-M15.** M0-M10 plus Phase B (v0.7.1) are complete. M11 is next.
+**MASTER_PLAN.md is the authoritative roadmap for M7-M15.** M0-M11 plus Phase B (v0.7.1) are complete. M12 is next.
 
 ---
 

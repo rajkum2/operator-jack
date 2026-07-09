@@ -367,6 +367,17 @@ fn call_tool(session: &mut RunSession, id: Value, params: &Value) -> RpcResponse
         Err(SessionError::Denied(msg)) => {
             RpcResponse::ok(id, tool_error(format!("denied by policy: {msg}")))
         }
+        // MCP has no pause/resume loop; surface escalation and takeover as tool
+        // errors so the client's model adapts (or asks its human) instead.
+        Err(SessionError::Escalation(msg)) => RpcResponse::ok(
+            id,
+            tool_error(format!(
+                "escalation required (a human must approve this action): {msg}"
+            )),
+        ),
+        Err(SessionError::Takeover(msg)) => {
+            RpcResponse::ok(id, tool_error(format!("human takeover required: {msg}")))
+        }
         Err(SessionError::Failed(msg)) => RpcResponse::ok(id, tool_error(msg)),
     }
 }

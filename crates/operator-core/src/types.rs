@@ -69,6 +69,10 @@ pub enum StepType {
     UiSnapshot,
     #[serde(rename = "ui.screenshot")]
     UiScreenshot,
+    /// Pause the run and hand control to the human (login walls, CAPTCHAs). The
+    /// agent never types credentials or solves CAPTCHAs itself (M11).
+    #[serde(rename = "ui.human_takeover")]
+    UiHumanTakeover,
 
     // Browser lane (M5)
     #[serde(rename = "browser.navigate")]
@@ -125,6 +129,9 @@ impl StepType {
             | StepType::UiSnapshot
             | StepType::UiScreenshot => "ui",
 
+            // Control lane: handled by the engine/session itself, not dispatched.
+            StepType::UiHumanTakeover => "control",
+
             // Browser lane
             StepType::BrowserNavigate
             | StepType::BrowserClick
@@ -169,6 +176,7 @@ impl StepType {
             StepType::UiFocusWindow => "ui.focus_window",
             StepType::UiSnapshot => "ui.snapshot",
             StepType::UiScreenshot => "ui.screenshot",
+            StepType::UiHumanTakeover => "ui.human_takeover",
             // Browser lane
             StepType::BrowserNavigate => "browser.navigate",
             StepType::BrowserClick => "browser.click",
@@ -222,6 +230,7 @@ impl std::str::FromStr for StepType {
             "ui.focus_window" => Ok(StepType::UiFocusWindow),
             "ui.snapshot" => Ok(StepType::UiSnapshot),
             "ui.screenshot" => Ok(StepType::UiScreenshot),
+            "ui.human_takeover" => Ok(StepType::UiHumanTakeover),
             // Browser lane
             "browser.navigate" => Ok(StepType::BrowserNavigate),
             "browser.click" => Ok(StepType::BrowserClick),
@@ -273,9 +282,13 @@ pub enum RunStatus {
     CompletedWithErrors,
     Failed,
     Cancelled,
-    /// Stopped early for a non-error reason (budget exhausted; later, an
-    /// escalation pause). Completed step results are preserved. Terminal.
+    /// Stopped early for a non-error reason (budget exhausted). Completed step
+    /// results are preserved. Terminal.
     Partial,
+    /// Suspended mid-run awaiting out-of-band approval or human takeover (M11).
+    /// A checkpoint is persisted; the run can be resumed with `--resume` once an
+    /// approval is granted. Non-terminal (it becomes a fresh run on resume).
+    Paused,
 }
 
 // ---------------------------------------------------------------------------
@@ -292,6 +305,76 @@ pub enum StepStatus {
     TimedOut,
     Skipped,
     Cancelled,
+}
+
+// ---------------------------------------------------------------------------
+// Checkpoint / Approval (M11 — long-horizon supervision)
+// ---------------------------------------------------------------------------
+
+/// Which execution lane produced a checkpoint, so `--resume` knows how to pick
+/// the run back up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckpointKind {
+    /// A deterministic plan run: resume replays from `cursor` (step index).
+    Plan,
+    /// A native agent run: resume re-seeds the transcript and continues.
+    Agent,
+}
+
+/// A persisted snapshot of a paused run, enough to resume it after the process
+/// exits. One (latest) checkpoint per run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Checkpoint {
+    pub run_id: String,
+    pub plan_id: String,
+    pub kind: CheckpointKind,
+    /// Resume cursor. For plans, `{ "step_index": N }`; for agents, the goal and
+    /// iteration are carried alongside in `transcript`/`goal`.
+    pub cursor: serde_json::Value,
+    /// Run-scoped variable map at pause time (control-flow vars, M13).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variables: Option<serde_json::Value>,
+    /// Agent transcript lines (agent runs only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<Vec<String>>,
+    /// The agent goal (agent runs only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub goal: Option<String>,
+    /// Why the run paused (escalation reason / takeover prompt).
+    pub reason: String,
+}
+
+/// The disposition of a pending approval request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalStatus {
+    Pending,
+    Approved,
+    Denied,
+}
+
+/// What kind of human decision a paused run is waiting on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalKind {
+    /// A high-consequence action the always-escalate classifier flagged.
+    Escalation,
+    /// A `ui.human_takeover` step (login/CAPTCHA); the human drives, then resumes.
+    Takeover,
+}
+
+/// A request for out-of-band human approval that gates resuming a paused run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Approval {
+    pub id: String,
+    pub run_id: String,
+    pub kind: ApprovalKind,
+    pub summary: String,
+    pub status: ApprovalStatus,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decided_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 // ---------------------------------------------------------------------------

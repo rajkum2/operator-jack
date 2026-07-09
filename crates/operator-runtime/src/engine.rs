@@ -16,7 +16,7 @@ use operator_ipc::client::HelperClient;
 use operator_store::Store;
 
 use crate::logging::RunLogger;
-use crate::policy::{PolicyDecision, PolicyGate};
+use crate::policy::{PolicyDecision, PolicyError, PolicyGate};
 use crate::RuntimeError;
 
 // ---------------------------------------------------------------------------
@@ -89,6 +89,20 @@ pub struct Engine {
     /// PID file with the correct run_id.
     #[allow(clippy::type_complexity)]
     on_run_created: Option<Box<dyn FnOnce(&str)>>,
+    /// One-shot resume state (M11): consumed at the start of the next
+    /// `execute_plan` to skip completed steps and grant an approved escalation.
+    pending_resume: Option<ResumeState>,
+}
+
+/// State carried into a resumed plan run (M11).
+#[derive(Debug, Clone)]
+pub struct ResumeState {
+    /// Steps with index `< cursor` are skipped (already ran in the prior run).
+    pub cursor: usize,
+    /// Variable map restored from the checkpoint.
+    pub variables: HashMap<String, serde_json::Value>,
+    /// Allow the first always-escalate action through once (approved out-of-band).
+    pub grant_escalation: bool,
 }
 
 impl Engine {
@@ -99,7 +113,15 @@ impl Engine {
             config,
             cancel_flag: Arc::new(AtomicBool::new(false)),
             on_run_created: None,
+            pending_resume: None,
         }
+    }
+
+    /// Arms a one-shot resume for the next `execute_plan` call (M11): the run
+    /// skips steps before `cursor`, restores `variables`, and — if
+    /// `grant_escalation` — lets the first always-escalate action through once.
+    pub fn resume_next(&mut self, state: ResumeState) {
+        self.pending_resume = Some(state);
     }
 
     /// Sets a callback that will be invoked with the run_id immediately after
@@ -128,6 +150,11 @@ impl Engine {
 
         // -- 1. Load plan -------------------------------------------------------
         let (_id, plan) = self.store.get_plan(plan_id)?;
+
+        // One-shot resume state (M11): skip completed steps, restore variables,
+        // and optionally allow one approved escalation.
+        let resume = self.pending_resume.take();
+        let resume_cursor = resume.as_ref().map(|r| r.cursor).unwrap_or(0);
 
         // -- 2. Determine effective mode ----------------------------------------
         // The configured (CLI/config) mode is a CEILING: a plan may make itself
@@ -177,6 +204,10 @@ impl Engine {
             allow_domains,
             grant_layers,
         );
+        // A resumed run may carry a one-shot approved-escalation allowance.
+        if resume.as_ref().map(|r| r.grant_escalation).unwrap_or(false) {
+            policy.grant_one_escalation();
+        }
 
         // -- 6. Optionally create HelperClient (lazy connect on first UI step) --
         let mut helper: Option<HelperClient> =
@@ -200,9 +231,12 @@ impl Engine {
         self.store.insert_event(&run_started_event)?;
         let _ = logger.log_event(&run_started_event);
 
-        // -- 8. Initialise variables from plan.variables ------------------------
+        // -- 8. Initialise variables from plan.variables (+ restored on resume) -
         let mut variables: HashMap<String, serde_json::Value> =
             plan.variables.clone().unwrap_or_default();
+        if let Some(ref r) = resume {
+            variables.extend(r.variables.clone());
+        }
 
         // -- 9. Step execution loop ---------------------------------------------
         let total_steps = plan.steps.len();
@@ -213,11 +247,19 @@ impl Engine {
         let mut policy_denied = false;
         let mut budget_exceeded: Option<String> = None;
         let mut bytes_written: u64 = 0;
+        // M11: set when the run pauses (escalation / human_takeover) at step idx.
+        // (step_index, reason, is_takeover).
+        let mut paused: Option<(usize, String, bool)> = None;
 
         // Effective run budget = most restrictive of config + plan budgets.
         let budget = merge_budgets(self.config.budget.as_ref(), plan.budget.as_ref());
 
         for (idx, step) in plan.steps.iter().enumerate() {
+            // -- 9a-resume. Skip steps already completed in the prior run (M11) --
+            if idx < resume_cursor {
+                continue;
+            }
+
             // -- 9a0. Budget: step count / wall clock (checked before each step) -
             if let Some(ref b) = budget {
                 if let Some(max) = b.max_steps {
@@ -304,15 +346,60 @@ impl Engine {
                 }
             };
 
+            // -- 9b-takeover. ui.human_takeover: hand control to the human -------
+            if step.step_type == StepType::UiHumanTakeover {
+                let prompt = interpolated_params
+                    .get("prompt")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Human takeover requested — complete the step, then continue.")
+                    .to_string();
+                if self.config.interactive {
+                    // Block for the human, then treat as a completed step.
+                    eprintln!("\n⏸  {prompt}");
+                    eprint!("Press Enter when done (or Ctrl-C to abort)… ");
+                    let _ = std::io::Write::flush(&mut std::io::stderr());
+                    let mut line = String::new();
+                    let _ = std::io::stdin().read_line(&mut line);
+                    let sr = StepResult {
+                        id: ulid::Ulid::new().to_string(),
+                        run_id: run_id.clone(),
+                        step_id: step.id.clone(),
+                        step_index: idx as u32,
+                        status: StepStatus::Succeeded,
+                        attempt: 1,
+                        started_at: Utc::now(),
+                        ended_at: Some(Utc::now()),
+                        input_json: interpolated_params.clone(),
+                        output_json: Some(json!({ "human_takeover": true })),
+                        error_json: None,
+                    };
+                    let _ = self.store.insert_step_result(&sr);
+                    steps_succeeded += 1;
+                    continue;
+                } else {
+                    // Non-interactive: pause and checkpoint for out-of-band resume.
+                    paused = Some((idx, prompt, true));
+                    steps_skipped += total_steps - idx;
+                    break;
+                }
+            }
+
             // -- 9c. Policy gate ------------------------------------------------
             // Use interpolated params for policy checks so variable-derived
             // app names and URLs are properly validated.
             let policy_decision =
                 match policy.check_step_with_params(step, &interpolated_params, idx, total_steps) {
                     Ok(d) => d,
-                    // All policy denials (app/domain allow-list, grant, escalation)
-                    // are hard failures handled uniformly and flag the run for the
-                    // policy-denied exit code.
+                    // A non-interactive escalation is a pause point (M11): checkpoint
+                    // and stop for out-of-band approval instead of hard-failing.
+                    Err(PolicyError::EscalationRequired(reason)) if !self.config.interactive => {
+                        paused = Some((idx, reason, false));
+                        steps_skipped += total_steps - idx;
+                        break;
+                    }
+                    // All other policy denials (app/domain allow-list, grant, or an
+                    // interactive escalation) are hard failures handled uniformly
+                    // and flag the run for the policy-denied exit code.
                     Err(policy_err) => {
                         policy_denied = true;
                         let msg = policy_err.to_string();
@@ -777,13 +864,42 @@ impl Engine {
             }
         }
 
+        // -- 9z. Paused: persist a checkpoint + open an approval (M11) ----------
+        if let Some((idx, ref reason, is_takeover)) = paused {
+            // Resume cursor: a takeover was completed by the human, so continue
+            // PAST it; an escalation still needs to RUN, so re-execute it (with
+            // the one-shot approved-escalation grant).
+            let resume_idx = if is_takeover { idx + 1 } else { idx };
+            let checkpoint = Checkpoint {
+                run_id: run_id.clone(),
+                plan_id: plan_id.to_string(),
+                kind: CheckpointKind::Plan,
+                cursor: json!({ "step_index": resume_idx }),
+                variables: Some(json!(variables)),
+                transcript: None,
+                goal: None,
+                reason: reason.clone(),
+            };
+            let _ = self.store.save_checkpoint(&checkpoint);
+            let kind = if is_takeover {
+                ApprovalKind::Takeover
+            } else {
+                ApprovalKind::Escalation
+            };
+            let _ = self.store.create_approval(&run_id, kind, reason);
+            tracing::warn!(run_id = %run_id, step = idx, "run paused: {reason}");
+        }
+
         // -- 10. Determine terminal run status ----------------------------------
         // P2 fix: Correct terminal status classification.
+        // - Paused if a human takeover / escalation suspended the run (M11)
         // - Cancelled if cancel flag was set (SIGINT/SIGTERM)
         // - Failed if aborted (on_fail=abort triggered)
         // - CompletedWithErrors if some steps failed but run was not aborted
         // - Succeeded if all steps passed
-        let terminal_status = if self.cancel_flag.load(Ordering::Relaxed) {
+        let terminal_status = if paused.is_some() {
+            RunStatus::Paused
+        } else if self.cancel_flag.load(Ordering::Relaxed) {
             RunStatus::Cancelled
         } else if aborted {
             RunStatus::Failed
@@ -900,9 +1016,17 @@ fn merge_budgets(
 /// can distinguish a policy/grant/escalation denial from an execution error.
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
-    /// Denied by the policy gate (allow-list, grant, escalation, or confirmation).
+    /// Denied by the policy gate (allow-list, grant, or confirmation).
     #[error("policy denied: {0}")]
     Denied(String),
+    /// The always-escalate classifier flagged this action; a human must approve
+    /// out-of-band before it can run (M11). The driver should pause + checkpoint.
+    #[error("escalation required: {0}")]
+    Escalation(String),
+    /// A `ui.human_takeover` control step: pause and let the human drive, then
+    /// resume (M11). The payload is the prompt to show the human.
+    #[error("human takeover: {0}")]
+    Takeover(String),
     /// The step ran but errored (execution/IPC/timeout).
     #[error("{0}")]
     Failed(String),
@@ -1013,6 +1137,26 @@ impl RunSession {
         &self.run_id
     }
 
+    /// The session's plan id (the synthetic session plan row).
+    pub fn plan_id(&self) -> &str {
+        &self.plan_id
+    }
+
+    /// Grants one out-of-band-approved escalation before resuming (M11): the
+    /// next always-escalate action is allowed through exactly once.
+    pub fn grant_one_escalation(&self) {
+        self.policy.grant_one_escalation();
+    }
+
+    /// Abandons the session WITHOUT writing a terminal run status — used when the
+    /// run paused (the supervisor has set status `Paused` and persisted a
+    /// checkpoint). Disconnects the helper so no child is left running.
+    pub fn abandon(mut self) {
+        if let Some(mut h) = self.helper.take() {
+            h.disconnect();
+        }
+    }
+
     /// Executes one step through the full gate + secret + audit + dispatch path.
     /// Returns the step's output JSON, or a [`SessionError`] distinguishing a
     /// policy denial from an execution failure. Does not retry — a driver (the
@@ -1022,12 +1166,27 @@ impl RunSession {
         self.step_index += 1;
         let params = step.params.clone();
 
+        // -- Control lane: ui.human_takeover is a pause request, not a dispatch.
+        if step.step_type == StepType::UiHumanTakeover {
+            let prompt = params
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Human takeover requested — complete the step, then resume.")
+                .to_string();
+            return Err(SessionError::Takeover(prompt));
+        }
+
         // -- Policy gate (grants / escalation / allow-lists) ------------------
         let decision = match self
             .policy
             .check_step_with_params(step, &params, idx, idx + 1)
         {
             Ok(d) => d,
+            // An always-escalate action is a pause point, not a failure: don't
+            // record a failed step result, surface it so the driver checkpoints.
+            Err(PolicyError::EscalationRequired(reason)) => {
+                return Err(SessionError::Escalation(reason));
+            }
             Err(e) => {
                 let msg = e.to_string();
                 self.record_failure(&step.id, idx, &params, &msg);

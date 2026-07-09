@@ -27,7 +27,9 @@ pub fn risk_level(step_type: &StepType) -> RiskLevel {
         | StepType::UiCheckAccessibilityPermission
         | StepType::UiListWindows
         | StepType::UiSnapshot
-        | StepType::UiScreenshot => RiskLevel::Low,
+        | StepType::UiScreenshot
+        // Control: hands off to the human; performs no action itself.
+        | StepType::UiHumanTakeover => RiskLevel::Low,
 
         // High risk -- filesystem mutations and arbitrary command execution
         StepType::SysWriteFile

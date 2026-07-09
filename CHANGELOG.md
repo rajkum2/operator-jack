@@ -6,7 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-See [`MASTER_PLAN.md`](MASTER_PLAN.md) for the authoritative roadmap. Next: M11 (long-horizon autonomy & supervision).
+See [`MASTER_PLAN.md`](MASTER_PLAN.md) for the authoritative roadmap. Next: M12 (web autonomy).
+
+## [0.12.0] - 2026-07-09
+
+M11 — Long-horizon autonomy & supervision. Runs can now pause, survive process exit, and resume after human approval — plus live supervision (follow, steer), pause notifications, transcript compaction, and audit-log pruning. Turns the one-shot executor into a supervisable, resumable agent.
+
+### Added
+- **Pause/resume infrastructure** — a new non-terminal `RunStatus::Paused` (resumable, exit code 0) and two SQLite tables (migration #2): `checkpoints` (one per run: cursor, variables, agent transcript, goal, reason) and `approvals` (id, run_id, kind `escalation`|`takeover`, status `pending`|`approved`|`denied`). New store methods: `save`/`load`/`delete_checkpoint`, `create_approval`, `list_approvals`, `get_approval`, `latest_approval_for_run`, `decide_approval`, `prune_runs`.
+- **Escalation → pause** (replaces M8's interim clean-fail): when the always-escalate classifier flags an action, the run checkpoints, opens a pending approval, posts a macOS notification, and ends `Paused` (exit 0) instead of hard-failing. Resume consumes a one-shot escalation allowance (`PolicyGate::grant_one_escalation`). (MCP still surfaces escalation as a tool error, since it has no run loop.)
+- **`ui.human_takeover` step** — a new control-lane step type (risk Low): an interactive plan run blocks for Enter; a non-interactive run pauses for out-of-band resume; the agent loop can emit it as a control action. The agent never types credentials or solves CAPTCHAs.
+- **Resume**: `operator-jack agent --resume <run-id>` and `operator-jack run --resume <run-id>` — both verify the run's approval is granted, then continue (the agent re-seeds the saved transcript; a plan skips completed steps via the checkpoint cursor).
+- **Approvals CLI**: `operator-jack approvals list [--all]`, `approvals approve <id>`, `approvals deny <id>`.
+- **Supervision DX**: `operator-jack logs --follow [<run-id>]` (tail per-run JSONL; also `logs follow`) and `operator-jack steer <run-id> "<message>"` (inject guidance into a running agent's next turn); macOS notifications on pause.
+- **Context compaction**: long agent transcripts (> ~24k chars) fold their oldest turns into a summary breadcrumb, keeping recent turns verbatim.
+- **Retention/pruning**: `operator-jack logs prune [--older-than-days N] [--keep M]` (also `logs --prune`) deletes old runs and cascades to `step_results`/`events`/`checkpoints`/`approvals` — fixes the audit's unbounded-growth finding.
+- **Kill-switch hardening**: SIGINT/SIGTERM sets the cancel flag; the engine always writes a terminal `Cancelled` status + `RunCancelled` event and disconnects the helper.
+- SPEC_FREEZE_V0.11.md (M11 long-horizon & supervision spec).
+
+### Note
+- Verified live: a plan with a `ui.human_takeover` step paused non-interactively (checkpoint + approval written, exit 0), refused `--resume` before approval, and completed after `approvals approve` + `--resume`; `logs prune` reclaimed 82 runs. Full gate green: `cargo fmt`, `cargo clippy -D warnings`, 152 Rust tests, 10 Swift tests, and `check-examples.sh` all pass.
 
 ## [0.11.0] - 2026-07-09
 

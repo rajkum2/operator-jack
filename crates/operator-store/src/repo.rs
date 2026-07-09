@@ -6,7 +6,10 @@ use serde::Serialize;
 
 use operator_core::event::Event;
 use operator_core::redaction::redact_value;
-use operator_core::types::{Mode, Plan, Run, RunStatus, StepResult, StepStatus};
+use operator_core::types::{
+    Approval, ApprovalKind, ApprovalStatus, Checkpoint, CheckpointKind, Mode, Plan, Run, RunStatus,
+    StepResult, StepStatus,
+};
 
 use crate::error::StoreError;
 use crate::migrations::all_migrations;
@@ -476,6 +479,291 @@ impl Store {
         }
         Ok(events)
     }
+
+    // -- checkpoints (M11) --------------------------------------------------
+
+    /// Persists (upserts) the latest checkpoint for a run, so a paused run can be
+    /// resumed after the process exits.
+    pub fn save_checkpoint(&self, cp: &Checkpoint) -> Result<(), StoreError> {
+        let now = Utc::now().to_rfc3339();
+        let kind = to_db_string(&cp.kind)?;
+        let cursor_json = redact_value(&cp.cursor).to_string();
+        let variables_json: Option<String> =
+            cp.variables.as_ref().map(|v| redact_value(v).to_string());
+        let transcript_json: Option<String> = cp
+            .transcript
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+        self.conn.execute(
+            "INSERT INTO checkpoints
+                (run_id, plan_id, kind, cursor_json, variables_json, transcript_json, goal, reason, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+             ON CONFLICT(run_id) DO UPDATE SET
+                kind = ?3, cursor_json = ?4, variables_json = ?5, transcript_json = ?6,
+                goal = ?7, reason = ?8, updated_at = ?9",
+            params![
+                cp.run_id,
+                cp.plan_id,
+                kind,
+                cursor_json,
+                variables_json,
+                transcript_json,
+                cp.goal,
+                cp.reason,
+                now,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Loads a run's checkpoint, if one exists.
+    pub fn load_checkpoint(&self, run_id: &str) -> Result<Option<Checkpoint>, StoreError> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT run_id, plan_id, kind, cursor_json, variables_json, transcript_json, goal, reason
+                 FROM checkpoints WHERE run_id = ?1",
+                params![run_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, String>(7)?,
+                    ))
+                },
+            )
+            .optional()?;
+
+        match row {
+            None => Ok(None),
+            Some((run_id, plan_id, kind, cursor, vars, transcript, goal, reason)) => {
+                let kind: CheckpointKind = from_db_string(&kind)?;
+                let cursor: serde_json::Value = serde_json::from_str(&cursor)?;
+                let variables: Option<serde_json::Value> =
+                    vars.as_deref().map(serde_json::from_str).transpose()?;
+                let transcript: Option<Vec<String>> = transcript
+                    .as_deref()
+                    .map(serde_json::from_str)
+                    .transpose()?;
+                Ok(Some(Checkpoint {
+                    run_id,
+                    plan_id,
+                    kind,
+                    cursor,
+                    variables,
+                    transcript,
+                    goal,
+                    reason,
+                }))
+            }
+        }
+    }
+
+    /// Removes a run's checkpoint (after a successful resume).
+    pub fn delete_checkpoint(&self, run_id: &str) -> Result<(), StoreError> {
+        self.conn
+            .execute("DELETE FROM checkpoints WHERE run_id = ?1", params![run_id])?;
+        Ok(())
+    }
+
+    // -- approvals (M11) ----------------------------------------------------
+
+    /// Creates a pending approval request and returns its id.
+    pub fn create_approval(
+        &self,
+        run_id: &str,
+        kind: ApprovalKind,
+        summary: &str,
+    ) -> Result<String, StoreError> {
+        let id = ulid::Ulid::new().to_string();
+        let now = Utc::now().to_rfc3339();
+        let kind_str = to_db_string(&kind)?;
+        let status_str = to_db_string(&ApprovalStatus::Pending)?;
+        // Redact the summary defensively — it may echo a step's params.
+        let summary = redact_value(&serde_json::Value::String(summary.to_string()))
+            .as_str()
+            .unwrap_or(summary)
+            .to_string();
+        self.conn.execute(
+            "INSERT INTO approvals (id, run_id, kind, summary, status, created_at, decided_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)",
+            params![id, run_id, kind_str, summary, status_str, now],
+        )?;
+        Ok(id)
+    }
+
+    /// Lists approvals, optionally filtered by status, most recent first.
+    pub fn list_approvals(
+        &self,
+        status: Option<ApprovalStatus>,
+    ) -> Result<Vec<Approval>, StoreError> {
+        let (sql, filter) = match status {
+            Some(s) => (
+                "SELECT id, run_id, kind, summary, status, created_at, decided_at
+                 FROM approvals WHERE status = ?1 ORDER BY created_at DESC",
+                Some(to_db_string(&s)?),
+            ),
+            None => (
+                "SELECT id, run_id, kind, summary, status, created_at, decided_at
+                 FROM approvals ORDER BY created_at DESC",
+                None,
+            ),
+        };
+        let mut stmt = self.conn.prepare(sql)?;
+        let map_row = |row: &rusqlite::Row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(6)?,
+            ))
+        };
+        let rows = match filter {
+            Some(ref f) => stmt.query_map(params![f], map_row)?,
+            None => stmt.query_map([], map_row)?,
+        };
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(approval_from_tuple(row?)?);
+        }
+        Ok(out)
+    }
+
+    /// Fetches a single approval by id.
+    pub fn get_approval(&self, id: &str) -> Result<Option<Approval>, StoreError> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT id, run_id, kind, summary, status, created_at, decided_at
+                 FROM approvals WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                    ))
+                },
+            )
+            .optional()?;
+        row.map(approval_from_tuple).transpose()
+    }
+
+    /// Returns the most recent approval for a run (any status), if any.
+    pub fn latest_approval_for_run(&self, run_id: &str) -> Result<Option<Approval>, StoreError> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT id, run_id, kind, summary, status, created_at, decided_at
+                 FROM approvals WHERE run_id = ?1 ORDER BY created_at DESC LIMIT 1",
+                params![run_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                    ))
+                },
+            )
+            .optional()?;
+        row.map(approval_from_tuple).transpose()
+    }
+
+    /// Sets an approval's disposition (approved/denied) and stamps `decided_at`.
+    /// Returns an error if the id is unknown.
+    pub fn decide_approval(&self, id: &str, status: ApprovalStatus) -> Result<(), StoreError> {
+        let status_str = to_db_string(&status)?;
+        let now = Utc::now().to_rfc3339();
+        let affected = self.conn.execute(
+            "UPDATE approvals SET status = ?1, decided_at = ?2 WHERE id = ?3",
+            params![status_str, now, id],
+        )?;
+        if affected == 0 {
+            return Err(StoreError::NotFound {
+                entity: "Approval".to_string(),
+                id: id.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    // -- retention (M11) ----------------------------------------------------
+
+    /// Deletes runs (and their step_results, events, checkpoints, approvals)
+    /// whose `started_at` is older than `cutoff`, keeping at least the
+    /// `keep_min` most recent runs regardless of age. Returns the number of runs
+    /// pruned. Plans are left intact (they are cheap and may be re-run).
+    pub fn prune_runs(&self, cutoff: DateTime<Utc>, keep_min: usize) -> Result<usize, StoreError> {
+        // Collect run ids eligible for pruning: older than cutoff, excluding the
+        // keep_min most recent runs overall.
+        let cutoff_str = cutoff.to_rfc3339();
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM runs
+             WHERE started_at < ?1
+               AND id NOT IN (SELECT id FROM runs ORDER BY started_at DESC LIMIT ?2)
+             ORDER BY started_at ASC",
+        )?;
+        let ids: Vec<String> = stmt
+            .query_map(params![cutoff_str, keep_min as i64], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        for id in &ids {
+            self.conn
+                .execute("DELETE FROM events WHERE run_id = ?1", params![id])?;
+            self.conn
+                .execute("DELETE FROM step_results WHERE run_id = ?1", params![id])?;
+            self.conn
+                .execute("DELETE FROM checkpoints WHERE run_id = ?1", params![id])?;
+            self.conn
+                .execute("DELETE FROM approvals WHERE run_id = ?1", params![id])?;
+            self.conn
+                .execute("DELETE FROM runs WHERE id = ?1", params![id])?;
+        }
+        Ok(ids.len())
+    }
+}
+
+/// Builds an [`Approval`] from a raw column tuple.
+fn approval_from_tuple(
+    t: (
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+    ),
+) -> Result<Approval, StoreError> {
+    let (id, run_id, kind, summary, status, created_at, decided_at) = t;
+    Ok(Approval {
+        id,
+        run_id,
+        kind: from_db_string(&kind)?,
+        summary,
+        status: from_db_string(&status)?,
+        created_at: parse_datetime(&created_at)?,
+        decided_at: decided_at.as_deref().map(parse_datetime).transpose()?,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -884,5 +1172,150 @@ mod tests {
             }
             other => panic!("expected NotFound, got: {:?}", other),
         }
+    }
+
+    // -- M11: checkpoints / approvals / retention ---------------------------
+
+    fn setup_run(store: &Store) -> String {
+        let plan = sample_plan();
+        let plan_id = store.save_plan(&plan).expect("save plan");
+        store.create_run(&plan_id, &Mode::Safe).expect("create run")
+    }
+
+    #[test]
+    fn test_checkpoint_roundtrip() {
+        use operator_core::types::{Checkpoint, CheckpointKind};
+        let store = Store::open_in_memory().unwrap();
+        let run_id = setup_run(&store);
+        let (plan_id, _) = {
+            let run = store.get_run(&run_id).unwrap();
+            (run.plan_id.clone(), run)
+        };
+
+        let cp = Checkpoint {
+            run_id: run_id.clone(),
+            plan_id,
+            kind: CheckpointKind::Agent,
+            cursor: json!({ "iteration": 3 }),
+            variables: None,
+            transcript: Some(vec!["Action: snapshot".to_string(), "=> ok".to_string()]),
+            goal: Some("compute 2+3".to_string()),
+            reason: "escalation: send in Messages".to_string(),
+        };
+        store.save_checkpoint(&cp).expect("save checkpoint");
+
+        let loaded = store.load_checkpoint(&run_id).unwrap().expect("checkpoint");
+        assert_eq!(loaded.kind, CheckpointKind::Agent);
+        assert_eq!(loaded.cursor["iteration"], 3);
+        assert_eq!(loaded.goal.as_deref(), Some("compute 2+3"));
+        assert_eq!(loaded.transcript.unwrap().len(), 2);
+
+        // Upsert overwrites the same run's checkpoint.
+        let cp2 = Checkpoint {
+            cursor: json!({ "iteration": 9 }),
+            ..cp
+        };
+        store.save_checkpoint(&cp2).unwrap();
+        assert_eq!(
+            store.load_checkpoint(&run_id).unwrap().unwrap().cursor["iteration"],
+            9
+        );
+
+        store.delete_checkpoint(&run_id).unwrap();
+        assert!(store.load_checkpoint(&run_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_approval_lifecycle() {
+        use operator_core::types::{ApprovalKind, ApprovalStatus};
+        let store = Store::open_in_memory().unwrap();
+        let run_id = setup_run(&store);
+
+        let id = store
+            .create_approval(&run_id, ApprovalKind::Escalation, "send money in Messages")
+            .expect("create approval");
+
+        // Pending filter finds it.
+        let pending = store.list_approvals(Some(ApprovalStatus::Pending)).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].id, id);
+        assert_eq!(pending[0].kind, ApprovalKind::Escalation);
+
+        let latest = store.latest_approval_for_run(&run_id).unwrap().unwrap();
+        assert_eq!(latest.status, ApprovalStatus::Pending);
+
+        // Approve it; it leaves the pending set and gets a decided_at stamp.
+        store
+            .decide_approval(&id, ApprovalStatus::Approved)
+            .expect("approve");
+        assert!(store
+            .list_approvals(Some(ApprovalStatus::Pending))
+            .unwrap()
+            .is_empty());
+        let decided = store.get_approval(&id).unwrap().unwrap();
+        assert_eq!(decided.status, ApprovalStatus::Approved);
+        assert!(decided.decided_at.is_some());
+
+        // Deciding an unknown id errors.
+        assert!(store
+            .decide_approval("01BOGUS", ApprovalStatus::Denied)
+            .is_err());
+    }
+
+    #[test]
+    fn test_prune_keeps_min_recent() {
+        let store = Store::open_in_memory().unwrap();
+        let plan = sample_plan();
+        let plan_id = store.save_plan(&plan).expect("save plan");
+        let mut runs = Vec::new();
+        for _ in 0..5 {
+            runs.push(store.create_run(&plan_id, &Mode::Safe).unwrap());
+        }
+
+        // Everything is "old" (cutoff in the far future), but keep the 2 newest.
+        let future = Utc::now() + chrono::Duration::days(1);
+        let pruned = store.prune_runs(future, 2).expect("prune");
+        assert_eq!(pruned, 3);
+        assert_eq!(store.list_runs(100).unwrap().len(), 2);
+
+        // Nothing older than the epoch → nothing pruned.
+        let epoch = DateTime::parse_from_rfc3339("1970-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(store.prune_runs(epoch, 0).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_prune_cascades_to_child_rows() {
+        use operator_core::types::{ApprovalKind, Checkpoint, CheckpointKind};
+        let store = Store::open_in_memory().unwrap();
+        let run_id = setup_run(&store);
+        // Attach a checkpoint + approval + event to the run.
+        store
+            .save_checkpoint(&Checkpoint {
+                run_id: run_id.clone(),
+                plan_id: store.get_run(&run_id).unwrap().plan_id,
+                kind: CheckpointKind::Plan,
+                cursor: json!({ "step_index": 1 }),
+                variables: None,
+                transcript: None,
+                goal: None,
+                reason: "takeover".to_string(),
+            })
+            .unwrap();
+        store
+            .create_approval(&run_id, ApprovalKind::Takeover, "log in")
+            .unwrap();
+
+        // Prune it (future cutoff, keep nothing).
+        assert_eq!(
+            store
+                .prune_runs(Utc::now() + chrono::Duration::days(1), 0)
+                .unwrap(),
+            1
+        );
+        assert!(store.load_checkpoint(&run_id).unwrap().is_none());
+        assert!(store.list_approvals(None).unwrap().is_empty());
+        assert!(store.get_run(&run_id).is_err());
     }
 }
