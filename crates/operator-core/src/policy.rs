@@ -20,6 +20,9 @@ pub fn risk_level(step_type: &StepType) -> RiskLevel {
         // Low risk -- read-only / informational
         StepType::SysReadFile
         | StepType::SysClipboardGet
+        | StepType::SysListDir
+        | StepType::DataParseCsv
+        | StepType::DataParseJson
         | StepType::UiListApps
         | StepType::UiFind
         | StepType::UiReadText
@@ -28,8 +31,12 @@ pub fn risk_level(step_type: &StepType) -> RiskLevel {
         | StepType::UiListWindows
         | StepType::UiSnapshot
         | StepType::UiScreenshot
-        // Control: hands off to the human; performs no action itself.
-        | StepType::UiHumanTakeover => RiskLevel::Low,
+        // Control: orchestration only; the body's leaf steps are each gated on
+        // their own risk when executed.
+        | StepType::UiHumanTakeover
+        | StepType::ControlForeach
+        | StepType::ControlIf
+        | StepType::ControlRepeatUntil => RiskLevel::Low,
 
         // High risk -- filesystem mutations and arbitrary command execution
         StepType::SysWriteFile
@@ -45,12 +52,15 @@ pub fn risk_level(step_type: &StepType) -> RiskLevel {
         | StepType::SysOpenUrl
         | StepType::SysQuitApp
         | StepType::SysClipboardSet
+        // Network: gated by domain grants/allow-list, like sys.open_url.
+        | StepType::HttpRequest
         | StepType::UiFocusApp
         | StepType::UiClick
         | StepType::UiSetValue
         | StepType::UiTypeText
         | StepType::UiKeyPress
         | StepType::UiSelectMenu
+        | StepType::UiScroll
         | StepType::UiFocusWindow
         // Browser lane
         | StepType::BrowserNavigate

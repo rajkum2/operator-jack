@@ -1333,6 +1333,19 @@ impl RunSession {
 
     /// Finalizes the session: marks the run terminal, emits `run_finished`, and
     /// disconnects the helper. Returns a summary of the session's steps.
+    /// Runs a program (a step list that may contain `control.*` steps) through
+    /// the deterministic control-flow interpreter (M13). Leaf steps execute via
+    /// [`execute_step`](Self::execute_step) — same gate/audit as everything else.
+    /// `variables` seeds the interpolation/condition scope.
+    pub fn run_program(
+        &mut self,
+        steps: &[Step],
+        variables: std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<(), crate::control::ControlError> {
+        let mut vars = variables;
+        crate::control::run_program(self, steps, &mut vars)
+    }
+
     pub fn finish(mut self) -> RunSummary {
         let status = if self.steps_failed > 0 {
             RunStatus::CompletedWithErrors
@@ -1370,6 +1383,15 @@ impl RunSession {
             duration_ms,
             policy_denied: self.policy_denied,
         }
+    }
+}
+
+/// Lets the control-flow interpreter (M13) drive a `RunSession`: each leaf step
+/// runs through the full gate/secret/audit path, so loop bodies are as governed
+/// as any other step.
+impl crate::control::LeafRunner for RunSession {
+    fn run_leaf(&mut self, step: &Step) -> Result<serde_json::Value, String> {
+        self.execute_step(step).map_err(|e| e.to_string())
     }
 }
 

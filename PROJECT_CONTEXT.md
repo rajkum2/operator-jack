@@ -9,7 +9,7 @@
 ## Quick Start (For New Session)
 
 1. Read this file completely
-2. Read the roadmap: `MASTER_PLAN.md` (authoritative, M7-M15). Newest spec: `SPEC_FREEZE_V0.12.md` (M12 web autonomy — browser lane wiring); prior: `SPEC_FREEZE_V0.11.md` (M11 long-horizon & supervision), `SPEC_FREEZE_V0.10.md` (M10 native agent loop), `SPEC_FREEZE_V0.9.md` (M9 MCP server mode), `SPEC_FREEZE_V0.8.md` (M8 safety envelope), `SPEC_FREEZE_V0.7.md` (M7 perception), `SPEC_FREEZE_V0.6.md` (M5 browser), `SPEC_FREEZE_V0.5.md` (M6 skills, retroactive); base contract: `SPEC_FREEZE_V0.2.md`
+2. Read the roadmap: `MASTER_PLAN.md` (authoritative, M7-M15). Newest spec: `SPEC_FREEZE_V0.13.md` (M13 hands completion & deterministic control flow); prior: `SPEC_FREEZE_V0.12.md` (M12 web autonomy — browser lane wiring), `SPEC_FREEZE_V0.11.md` (M11 long-horizon & supervision), `SPEC_FREEZE_V0.10.md` (M10 native agent loop), `SPEC_FREEZE_V0.9.md` (M9 MCP server mode), `SPEC_FREEZE_V0.8.md` (M8 safety envelope), `SPEC_FREEZE_V0.7.md` (M7 perception), `SPEC_FREEZE_V0.6.md` (M5 browser), `SPEC_FREEZE_V0.5.md` (M6 skills, retroactive); base contract: `SPEC_FREEZE_V0.2.md`
 3. Check `VERSION_LOG` below for what changed last
 4. Check `CURRENT_STATE` below for what's built vs pending
 5. Check `NEXT_ACTIONS` for what to do next
@@ -34,6 +34,7 @@
 |------|---------|
 | `PROJECT_CONTEXT.md` | THIS FILE — resume context, version log, state tracker |
 | `MASTER_PLAN.md` | Authoritative forward roadmap (M7-M15) |
+| `SPEC_FREEZE_V0.13.md` | M13 spec — hands completion & deterministic control flow (data/net steps `sys.list_dir`/`data.parse_csv`/`data.parse_json`/`http.request`, `ui.scroll`, `control.foreach`/`if`/`repeat_until`) |
 | `SPEC_FREEZE_V0.12.md` | M12 spec — web autonomy (browser lane wired into plans/agent/MCP, profile isolation, browser.snapshot/get_text_all/get_attributes_all/download) |
 | `SPEC_FREEZE_V0.11.md` | M11 spec — long-horizon & supervision (Paused status, checkpoint/approval tables, ui.human_takeover, resume, logs --follow/prune) |
 | `SPEC_FREEZE_V0.10.md` | M10 spec — native agent loop (provider `chat`, observe→propose→execute→re-observe, agent mode semantics) |
@@ -85,6 +86,17 @@
 ---
 
 ## VERSION_LOG
+
+### v0.14.0 — 2026-07-09
+**Status:** M13 COMPLETE (partial-scope — see item 7). Hands completion & deterministic control flow — data/network/filesystem steps, the first scroll verb, and deterministic control flow (foreach/if/repeat_until) that runs each leaf through a RunSession. Crate count unchanged at 11. 163 Rust tests + 10 Swift tests pass.
+**Changes:**
+1. **Data/network/filesystem steps (system lane)**: `sys.list_dir {path, pattern?}` (glob + metadata, name-sorted); `data.parse_csv {text|path, headers?}` (RFC-4180-ish: quoted fields, embedded commas, `""` escapes → row objects); `data.parse_json {text|path, pointer?}` (RFC-6901 JSON pointer); `http.request {url, method?, headers?, body?}` (blocking, 30s timeout, 1 MiB body cap; gated by the domain allow-list AND grants, like `sys.open_url`).
+2. **`ui.scroll` (UI lane)** — the first scroll verb; new Swift handler `handleScroll` (`Methods/Scroll.swift`) posts scroll-wheel CGEvents (params `app`, `dy`, `dx`, `clicks`, `to: "top"|"bottom"`); Swift handler registry 18 → 19.
+3. **Deterministic control flow (control lane)**: `control.foreach {items, as, steps, max_iterations?}`, `control.if {condition, then, else?}`, `control.repeat_until {steps, condition, max_iterations}`. Bodies carry sub-steps inside `params` (the flat plan schema is unchanged). Conditions are `{left, op, right}` with ops `== != < <= > >= contains exists empty` (numeric or string compare). Mandatory iteration caps (100k hard ceiling; `repeat_until` requires `max_iterations`); nesting bounded at 16. Variables: `${var}` (type-preserving), `save_as` binds a leaf's output, `foreach` binds the loop var + `__index`. The interpreter (`operator-runtime::control`) runs each leaf through `RunSession::execute_step` — the same policy gate, `{{secret:*}}` resolution, redaction, and audit as plan execution — and audits each iteration independently. `operator-jack run`/`exec` auto-detect control-flow plans and route them through the interpreter over a RunSession (flat plans keep the existing engine path). Control-flow plans are non-interactive for confirmations (they need `--yes` or a grant for safe-mode medium/high steps).
+4. **Agent + MCP catalogs**: the agent loop gains actions `list_dir`, `parse_csv`, `parse_json`, `http_request`; the MCP catalog gains the matching tools (`list_dir`, `parse_csv`, `parse_json`, `http_request`), 23 → 27 tools — completing the M9 surface.
+5. Version bumped to 0.14.0 (workspace + Swift `helperVersion`). Created `SPEC_FREEZE_V0.13.md` (M13 hands completion & control-flow spec); added `docs/examples/control-flow-foreach.json`.
+6. **Verified live**: a `parse_csv → foreach → if → write_file` per-row plan ran `Succeeded` with correct branches; standalone `parse_csv` (quoted/escaped fields), `parse_json` (pointer), and `list_dir` (glob) each verified. Full gate green: `cargo fmt` clean, `cargo clippy -D warnings` clean, 163 Rust tests, 10 Swift tests, `check-examples.sh` all valid.
+7. **Known-partial (stated honestly)**: only `ui.scroll` of the planned M13 actuation-verb list landed — right-click/double-click/hover/drag, coordinate `ui.click_at`/`ui.scroll_at` (Retina mapping), typed `ui.set_value` (bool/number), window management, and Open/Save dialog helpers are DEFERRED; resume-aware batches and the skill-compiler stretch are DEFERRED. `ui.scroll` compiles and is wired end-to-end but was not live-exercised (needs Accessibility permission + a live window).
 
 ### v0.13.0 — 2026-07-09
 **Status:** M12 COMPLETE. Web autonomy — the browser lane is wired into plans, the agent loop, and MCP, running against an isolated per-run Chrome. The M5 CDP executor (previously reachable only via the `browser` CLI subcommands, with `browser.*` plan steps hard-rejected) is now a first-class lane. Crate count unchanged at 11. 155 Rust tests + 10 Swift tests pass.
@@ -430,6 +442,14 @@
 - [x] M12 agent + MCP browser catalogs: MCP gains 8 browser tools (browser_navigate, browser_snapshot, browser_get_text, browser_get_text_all, browser_get_attributes_all, browser_click, browser_type, browser_download; 23 tools total); the agent loop gains those plus browser_screenshot and browser_wait_for (10 browser actions)
 - [x] docs/examples/browser-navigate.json + docs/examples/browser-scrape.json (both validate; moved out of the removed pending-m12/ dir)
 - [x] 155 Rust tests + 10 Swift tests passing (v0.13.0)
+- [x] SPEC_FREEZE_V0.13.md (M13 hands completion & control-flow spec)
+- [x] M13 data/network/filesystem steps (system lane): `sys.list_dir {path, pattern?}` (glob + metadata, name-sorted), `data.parse_csv {text|path, headers?}` (RFC-4180-ish → row objects), `data.parse_json {text|path, pointer?}` (RFC-6901 pointer), `http.request {url, method?, headers?, body?}` (blocking, 30s timeout, 1 MiB cap; gated by the domain allow-list AND grants, like `sys.open_url`)
+- [x] M13 `ui.scroll` (UI lane) — first scroll verb; new Swift handler `handleScroll` (`Methods/Scroll.swift`) posts scroll-wheel CGEvents (params app/dy/dx/clicks/to:"top"|"bottom"); Swift handler registry 18 → 19 (wired end-to-end, not yet live-exercised)
+- [x] M13 deterministic control flow (control lane): `control.foreach`/`control.if`/`control.repeat_until` — sub-steps inside `params` (flat schema unchanged), `{left, op, right}` conditions (`== != < <= > >= contains exists empty`), mandatory iteration caps (100k ceiling; repeat_until requires max_iterations), nesting ≤ 16, `${var}` (type-preserving) + `save_as` + foreach loop var/`__index`; interpreter `operator-runtime::control` runs each leaf through `RunSession::execute_step` (same gate/secret/redaction/audit, each iteration independently audited); `run`/`exec` auto-detect and route control-flow plans (flat plans keep the existing engine path); non-interactive for confirmations
+- [x] M13 agent + MCP catalogs: agent actions + MCP tools gain `list_dir`, `parse_csv`, `parse_json`, `http_request` (MCP 23 → 27 tools, completing the M9 surface)
+- [x] docs/examples/control-flow-foreach.json
+- [x] 163 Rust tests + 10 Swift tests passing (v0.14.0)
+- [ ] M13 deferred (NOT started): remaining actuation verbs — right-click/double-click/hover/drag, coordinate `ui.click_at`/`ui.scroll_at` (Retina mapping), typed `ui.set_value` (bool/number), window management, Open/Save dialog helpers; resume-aware batches; skill-compiler stretch (see MASTER_PLAN.md)
 
 ### Milestone Status
 
@@ -451,7 +471,8 @@
 | M10 | DONE | Native agent loop: operator-agent crate (observe→propose one JSON action→execute via RunSession→re-observe), provider `chat()`, `operator-jack agent` CLI; verified live on Calculator via local Ollama |
 | M11 | DONE | Long-horizon autonomy & supervision: pause/resume (`RunStatus::Paused`, checkpoint + approval tables), escalation→pause, `ui.human_takeover`, `run/agent --resume`, `approvals` CLI, `logs --follow`/`steer`/notifications, context compaction, `logs prune`, kill-switch hardening; verified live |
 | M12 | DONE | Web autonomy: browser lane wired into plans/agent/MCP, profile isolation (isolated per-run Chrome; `browser.real_profile` escalation), extraction verbs (`browser.get_text_all`/`get_attributes_all`/`snapshot`/`download`), sync↔async `browser_lane` bridge; verified live |
-| M13-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md — M13 hands+control flow (next), M14 native macOS lane, M15 trust/residency |
+| M13 | DONE | Hands completion & deterministic control flow: data/net steps (`sys.list_dir`, `data.parse_csv`/`parse_json`, `http.request`), `ui.scroll`, `control.foreach`/`if`/`repeat_until` (interpreter over RunSession); agent + MCP gain list_dir/parse_csv/parse_json/http_request (MCP → 27 tools); verified live (only `ui.scroll` of the actuation verbs landed — rest deferred) |
+| M14-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md — M14 native macOS lane (next), M15 trust/residency & measurement |
 
 ---
 
@@ -459,10 +480,12 @@
 
 **Immediate next steps (in order) — see MASTER_PLAN.md for full detail:**
 
-1. **M13 — Hands completion & deterministic control flow (v0.14.0)** — actuation verbs (scroll/right-click/double-click/hover/drag, coordinate clicks), plan schema v2 control flow (foreach/if/repeat_until with iteration caps), data/network steps (list_dir, parse_csv/json, http.request), resume-aware batches. Depends on M7 (refs); M11 (resume-aware batches only); M10 (skill-compiler stretch only).
-2. **M14 — Native macOS integration lane (v0.15.0)** — `script.applescript`/`jxa`/`shortcuts.run` step types (exec-grade grants), Automation TCC handling in `doctor`, document steps (`doc.pdf_text`, `doc.ocr` via Vision.framework), recipe skills for Mail/Calendar/Finder.
+1. **M14 — Native macOS integration lane (v0.15.0)** — `script.applescript`/`jxa`/`shortcuts.run` step types (exec-grade grants), Automation TCC handling in `doctor`, document steps (`doc.pdf_text`, `doc.ocr` via Vision.framework), recipe skills for Mail/Calendar/Finder.
+2. **M15 — Trust, residency & measurement (v0.16.0)** — see MASTER_PLAN.md.
 
-**MASTER_PLAN.md is the authoritative roadmap for M7-M15.** M0-M12 plus Phase B (v0.7.1) are complete. M13 is next.
+**Deferred from M13 (fold into a later hands pass):** the remaining actuation verbs — right-click/double-click/hover/drag, coordinate `ui.click_at`/`ui.scroll_at` (Retina mapping), typed `ui.set_value` (bool/number), window management, and Open/Save dialog helpers — plus resume-aware batches and the skill-compiler stretch.
+
+**MASTER_PLAN.md is the authoritative roadmap for M7-M15.** M0-M13 plus Phase B (v0.7.1) are complete (M13 partial-scope — see the deferrals above). M14 is next.
 
 ---
 
@@ -511,4 +534,4 @@ When multiple AX elements match and no `index` is given: interactive mode prompt
 
 ---
 
-*Last updated: 2026-07-09 — M12 COMPLETE (v0.13.0). Web autonomy — the browser lane is now wired into plans, the agent loop, and MCP (the M5 CDP executor was previously reachable only via the `browser` CLI subcommands, with `browser.*` plan steps hard-rejected). Profile isolation landed first (security-critical): a per-run `BrowserHandle` launches the lane's OWN isolated Chrome with a dedicated `--user-data-dir` (ephemeral per-run by default, removed on close; or a named persistent profile) — never the user's real logged-in profile — and refuses to attach to a Chrome it didn't launch unless the escalating `browser.real_profile` capability is granted; headless by default (headed available for human takeover). A new `operator-runtime::browser_lane` module bridges the sync engine to the async CDP client over std channels (a dedicated OS thread running its own multi-threaded tokio runtime — no nested-runtime panic). New extraction verbs `browser.get_text_all`/`get_attributes_all`/`snapshot`/`download`, auto-waiting selectors (poll up to 5s), and real navigation waits (`document.readyState`); the agent and MCP catalogs gained browser tools (MCP → 23 tools; agent → 10 browser actions). Crate count unchanged at 11. M0-M12 plus Phase B done. 155 Rust tests + 10 Swift tests passing. Spec: SPEC_FREEZE_V0.12.md. Next: M13 (hands completion & deterministic control flow) per MASTER_PLAN.md.*
+*Last updated: 2026-07-09 — M13 COMPLETE (v0.14.0), partial-scope. Hands completion & deterministic control flow: data/network/filesystem steps on the system lane (`sys.list_dir` glob+metadata, `data.parse_csv` RFC-4180-ish → row objects, `data.parse_json` RFC-6901 pointer, `http.request` blocking with a 30s timeout + 1 MiB cap, gated by the domain allow-list AND grants like `sys.open_url`); `ui.scroll` — the first scroll verb (new Swift handler `handleScroll`/`Methods/Scroll.swift`, registry 18 → 19); and deterministic control flow (`control.foreach`/`control.if`/`control.repeat_until`) whose bodies carry sub-steps inside `params` (flat plan schema unchanged), with `{left, op, right}` conditions, mandatory iteration caps (100k ceiling; repeat_until requires max_iterations) and nesting ≤ 16, `${var}`/`save_as`/foreach-loop-var+`__index` variables, and an interpreter (`operator-runtime::control`) that runs each leaf through `RunSession::execute_step` (same gate/secret/redaction/audit, each iteration independently audited) — `run`/`exec` auto-detect control-flow plans (flat plans keep the existing engine path). The agent loop and MCP catalog gained `list_dir`/`parse_csv`/`parse_json`/`http_request` (MCP → 27 tools, completing the M9 surface). Crate count unchanged at 11. Known-partial: only `ui.scroll` of the planned actuation verbs landed (right-click/double-click/hover/drag, coordinate clicks/scroll with Retina mapping, typed set_value, window management, Open/Save dialog helpers, resume-aware batches, and the skill-compiler stretch are deferred); `ui.scroll` is wired end-to-end but not yet live-exercised. M0-M13 plus Phase B done. 163 Rust tests + 10 Swift tests passing. Spec: SPEC_FREEZE_V0.13.md. Next: M14 (native macOS integration lane) per MASTER_PLAN.md.*

@@ -112,6 +112,11 @@ fn action_step_type(name: &str) -> Option<StepType> {
         "read_file" => StepType::SysReadFile,
         "write_file" => StepType::SysWriteFile,
         "exec" => StepType::SysExec,
+        // Data / filesystem / network (M13).
+        "list_dir" => StepType::SysListDir,
+        "parse_csv" => StepType::DataParseCsv,
+        "parse_json" => StepType::DataParseJson,
+        "http_request" => StepType::HttpRequest,
         // Web (browser lane, M12) — an isolated Chrome for scraping/automation.
         "browser_navigate" => StepType::BrowserNavigate,
         "browser_snapshot" => StepType::BrowserSnapshot,
@@ -147,6 +152,9 @@ Available actions (args mirror the step's params):
 - read_text       {"app": "Calculator", "element_ref": "e1"}  read an element's text/value
 - wait_for        {"app": "X", "selector": {"role": "AXWindow"}, "timeout_ms": 5000}
 - read_file       {"path": "~/x.txt"} / write_file {"path": "~/x.txt", "content": "..."} / exec {"command": "ls", "args": ["-la"]}
+- list_dir        {"path": "~/dir", "pattern": "*.csv"}          list files with metadata
+- parse_csv       {"path": "~/x.csv"} / parse_json {"text": "...", "pointer": "/a/0"}   turn text into structured data
+- http_request    {"url": "https://api...", "method": "GET"}     fetch data (subject to domain grants)
 - human_takeover  {"prompt": "log in, then I'll continue"}     hand control to the human for logins/CAPTCHAs, then resume
 
 Web actions (an isolated Chrome — use these to scrape or automate websites):

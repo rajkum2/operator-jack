@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "name": "Control flow: parse then foreach (M13)",
+  "description": "Parse an inline CSV, then for each row conditionally write a file. Demonstrates data.parse_csv + save_as + control.foreach + control.if + dotted-path interpolation. Runs offline; use --yes.",
+  "mode": "unsafe",
+  "steps": [
+    {
+      "id": "parse",
+      "type": "data.parse_csv",
+      "params": {
+        "text": "name,qty\nAlpha,3\nBeta,7\n",
+        "save_as": "data"
+      }
+    },
+    {
+      "id": "loop",
+      "type": "control.foreach",
+      "params": {
+        "items": "${data}",
+        "as": "row",
+        "max_iterations": 100,
+        "steps": [
+          {
+            "id": "branch",
+            "type": "control.if",
+            "params": {
+              "condition": { "left": "${row.qty}", "op": ">=", "right": 5 },
+              "then": [
+                {
+                  "id": "big",
+                  "type": "sys.clipboard_set",
+                  "params": { "text": "${row.name}: BIG (${row.qty})" }
+                }
+              ],
+              "else": [
+                {
+                  "id": "small",
+                  "type": "sys.clipboard_set",
+                  "params": { "text": "${row.name}: small (${row.qty})" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

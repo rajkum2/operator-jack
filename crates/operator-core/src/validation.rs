@@ -149,6 +149,11 @@ pub fn validate_step_params(
         StepType::SysQuitApp => require_string_param(params, "app"),
         StepType::SysClipboardGet => Ok(()),
         StepType::SysClipboardSet => require_string_param(params, "text"),
+        StepType::SysListDir => require_string_param(params, "path"),
+        // data.*: need `text` OR `path` (checked at runtime).
+        StepType::DataParseCsv => Ok(()),
+        StepType::DataParseJson => Ok(()),
+        StepType::HttpRequest => require_string_param(params, "url"),
         StepType::UiCheckAccessibilityPermission => Ok(()),
         StepType::UiListApps => Ok(()),
         StepType::UiFocusApp => require_string_param(params, "app"),
@@ -193,8 +198,21 @@ pub fn validate_step_params(
         StepType::UiSnapshot => require_string_param(params, "app"),
         // ui.screenshot: `app` is optional (omit to capture the main display).
         StepType::UiScreenshot => Ok(()),
+        StepType::UiScroll => require_string_param(params, "app"),
         // ui.human_takeover: all params optional (`prompt`, `wait_for`).
         StepType::UiHumanTakeover => Ok(()),
+        // control.*: bodies (sub-steps) + conditions are validated by the
+        // interpreter at run time; require the key structural params here.
+        StepType::ControlForeach => {
+            require_present(params, "items")?;
+            require_string_param(params, "as")?;
+            require_array_param(params, "steps")
+        }
+        StepType::ControlIf => require_object_param(params, "condition"),
+        StepType::ControlRepeatUntil => {
+            require_array_param(params, "steps")?;
+            require_object_param(params, "condition")
+        }
         // Browser lane
         StepType::BrowserNavigate => require_string_param(params, "url"),
         StepType::BrowserClick => require_string_param(params, "selector"),
@@ -230,6 +248,15 @@ fn require_string_param(params: &serde_json::Value, key: &str) -> Result<(), Str
     match params.get(key) {
         Some(serde_json::Value::String(_)) => Ok(()),
         Some(_) => Err(format!("param '{}' must be a string", key)),
+        None => Err(format!("missing required param '{}'", key)),
+    }
+}
+
+/// Requires a param to be present with any type (used where the value may be an
+/// array literal OR a `{{var}}` string, e.g. control.foreach `items`).
+fn require_present(params: &serde_json::Value, key: &str) -> Result<(), String> {
+    match params.get(key) {
+        Some(_) => Ok(()),
         None => Err(format!("missing required param '{}'", key)),
     }
 }

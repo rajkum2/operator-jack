@@ -312,6 +312,50 @@ fn tools() -> Vec<ToolDef> {
                 "properties": {"url": {"type": "string"}, "selector": {"type": "string"}, "dir": {"type": "string"}}
             }),
         },
+        // Data / filesystem / network (M13) — completes the M9 tool surface.
+        ToolDef {
+            name: "list_dir",
+            step_type: StepType::SysListDir,
+            description: "List a directory (optionally glob-filtered by `pattern`) with per-entry metadata.",
+            schema: || json!({
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "pattern": {"type": "string"}},
+                "required": ["path"]
+            }),
+        },
+        ToolDef {
+            name: "parse_csv",
+            step_type: StepType::DataParseCsv,
+            description: "Parse CSV (from `text` or `path`) into row objects keyed by header.",
+            schema: || json!({
+                "type": "object",
+                "properties": {"text": {"type": "string"}, "path": {"type": "string"}, "headers": {"type": "boolean"}}
+            }),
+        },
+        ToolDef {
+            name: "parse_json",
+            step_type: StepType::DataParseJson,
+            description: "Parse JSON (from `text` or `path`), optionally selecting a JSON pointer.",
+            schema: || json!({
+                "type": "object",
+                "properties": {"text": {"type": "string"}, "path": {"type": "string"}, "pointer": {"type": "string"}}
+            }),
+        },
+        ToolDef {
+            name: "http_request",
+            step_type: StepType::HttpRequest,
+            description: "Make an HTTP request (subject to the session's domain grant) → {status, headers, body}.",
+            schema: || json!({
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "method": {"type": "string"},
+                    "headers": {"type": "object"},
+                    "body": {}
+                },
+                "required": ["url"]
+            }),
+        },
     ]
 }
 

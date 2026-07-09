@@ -6,7 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-See [`MASTER_PLAN.md`](MASTER_PLAN.md) for the authoritative roadmap. Next: M13 (hands completion & deterministic control flow).
+See [`MASTER_PLAN.md`](MASTER_PLAN.md) for the authoritative roadmap. Next: M14 (native macOS integration lane).
+
+## [0.14.0] - 2026-07-09
+
+M13 — Hands completion & deterministic control flow. Data/network/filesystem steps, the first scroll verb, and deterministic control flow (foreach/if/repeat_until) so plans can loop, branch, and process data without a round-trip to an LLM.
+
+### Added
+- **Data/network/filesystem steps** (system lane): `sys.list_dir {path, pattern?}` (glob + metadata, name-sorted); `data.parse_csv {text|path, headers?}` (RFC-4180-ish — quoted fields, embedded commas, `""` escapes → row objects); `data.parse_json {text|path, pointer?}` (RFC-6901 JSON pointer); `http.request {url, method?, headers?, body?}` (blocking, 30s timeout, 1 MiB body cap; gated by the domain allow-list AND grants, like `sys.open_url`).
+- **`ui.scroll`** (UI lane) — the first scroll verb; the Swift handler posts scroll-wheel CGEvents (params `app`, `dy`, `dx`, `clicks`, `to: "top"|"bottom"`). New Swift handler `handleScroll` (`Methods/Scroll.swift`); handler registry 18 → 19.
+- **Deterministic control flow** (control lane): `control.foreach {items, as, steps, max_iterations?}`, `control.if {condition, then, else?}`, and `control.repeat_until {steps, condition, max_iterations}`. Bodies carry sub-steps inside `params` (the flat plan schema is unchanged). Conditions are `{left, op, right}` with ops `== != < <= > >= contains exists empty` (numeric or string compare). Iteration caps are mandatory (100k hard ceiling; `repeat_until` requires `max_iterations`) and nesting is bounded at 16. Variables: `${var}` (type-preserving), `save_as` binds a leaf's output, `foreach` binds the loop var + `__index`. The interpreter (`operator-runtime::control`) runs each leaf through `RunSession::execute_step` — the same policy gate, `{{secret:*}}` resolution, redaction, and audit as plan execution — and audits each iteration independently. `operator-jack run`/`exec` auto-detect control-flow plans and route them through the interpreter over a RunSession (flat plans keep the existing engine path). Control-flow plans are non-interactive for confirmations (they need `--yes` or a grant for safe-mode medium/high steps).
+- **Agent + MCP catalogs** — the agent loop gains actions `list_dir`, `parse_csv`, `parse_json`, `http_request`; the MCP catalog gains the matching tools `list_dir`, `parse_csv`, `parse_json`, `http_request` (23 → 27 tools, completing the M9 surface).
+- `docs/examples/control-flow-foreach.json` (new example; validates under `check-examples`).
+- SPEC_FREEZE_V0.13.md (M13 hands completion & control-flow spec).
+
+### Note
+- Verified live: a `parse_csv → foreach → if → write_file` per-row plan ran `Succeeded` with correct branches; standalone `parse_csv` (quoted/escaped fields), `parse_json` (pointer), and `list_dir` (glob) were each verified. Full gate green: `cargo fmt`, `cargo clippy -D warnings`, 163 Rust tests, 10 Swift tests, and `check-examples.sh` all pass.
+- Known-partial: only `ui.scroll` of the planned M13 actuation verbs landed — right-click/double-click/hover/drag, coordinate `ui.click_at`/`ui.scroll_at` (Retina mapping), typed `ui.set_value` (bool/number), window management, and Open/Save dialog helpers are deferred, as are resume-aware batches and the skill-compiler stretch. `ui.scroll` compiles and is wired end-to-end but was not live-exercised (it needs Accessibility permission and a live window).
 
 ## [0.13.0] - 2026-07-09
 

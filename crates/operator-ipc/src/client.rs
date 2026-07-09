@@ -326,7 +326,7 @@ fn translate_method_name(step_type_str: &str) -> String {
         "ui.list_windows" => "ui.listWindows".to_string(),
         "ui.focus_window" => "ui.focusWindow".to_string(),
         // These are already the same in both conventions (single-word verbs).
-        "ui.find" | "ui.click" | "ui.ping" | "ui.snapshot" | "ui.screenshot" => {
+        "ui.find" | "ui.click" | "ui.ping" | "ui.snapshot" | "ui.screenshot" | "ui.scroll" => {
             step_type_str.to_string()
         }
         // Unknown method — pass through as-is.
@@ -360,6 +360,7 @@ mod tests {
         assert_eq!(translate_method_name("ui.find"), "ui.find");
         assert_eq!(translate_method_name("ui.click"), "ui.click");
         assert_eq!(translate_method_name("ui.ping"), "ui.ping");
+        assert_eq!(translate_method_name("ui.scroll"), "ui.scroll");
 
         // Unknown method — pass through
         assert_eq!(translate_method_name("custom.method"), "custom.method");

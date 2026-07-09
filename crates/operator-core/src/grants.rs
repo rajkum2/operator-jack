@@ -182,7 +182,7 @@ fn grant_checks_for_step(
             v
         }
         StepType::SysExec => vec![(Capability::Exec, reconstruct_cmdline(params))],
-        StepType::SysOpenUrl | StepType::BrowserNavigate => s("url")
+        StepType::SysOpenUrl | StepType::BrowserNavigate | StepType::HttpRequest => s("url")
             .map(|u| vec![(Capability::Domain, u)])
             .unwrap_or_default(),
         _ => vec![],

@@ -1,4 +1,5 @@
 pub mod browser_lane;
+pub mod control;
 pub mod engine;
 mod error;
 pub mod logging;

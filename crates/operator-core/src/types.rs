@@ -37,6 +37,33 @@ pub enum StepType {
     SysClipboardGet,
     #[serde(rename = "sys.clipboard_set")]
     SysClipboardSet,
+    /// List a directory (optionally glob-filtered) → array of entries (M13).
+    #[serde(rename = "sys.list_dir")]
+    SysListDir,
+
+    // Data lane (M13) — pure transforms, no side effects.
+    /// Parse CSV text (or a file) → array of row objects/arrays.
+    #[serde(rename = "data.parse_csv")]
+    DataParseCsv,
+    /// Parse JSON text (or a file), optionally at a JSON pointer.
+    #[serde(rename = "data.parse_json")]
+    DataParseJson,
+
+    // Network lane (M13) — HTTP under domain grants.
+    /// Make an HTTP request → {status, headers, body}.
+    #[serde(rename = "http.request")]
+    HttpRequest,
+
+    // Control lane (M13) — deterministic control flow; bodies carry sub-steps.
+    /// Iterate a collection, running the body per element.
+    #[serde(rename = "control.foreach")]
+    ControlForeach,
+    /// Run one of two branches based on a condition.
+    #[serde(rename = "control.if")]
+    ControlIf,
+    /// Run the body until a condition holds or `max_iterations` is hit.
+    #[serde(rename = "control.repeat_until")]
+    ControlRepeatUntil,
 
     // UI lane
     #[serde(rename = "ui.check_accessibility_permission")]
@@ -69,6 +96,10 @@ pub enum StepType {
     UiSnapshot,
     #[serde(rename = "ui.screenshot")]
     UiScreenshot,
+    /// Scroll a scrollable element (or the focused window) by a delta or to an
+    /// edge (M13). No scroll verb existed in the UI lane before.
+    #[serde(rename = "ui.scroll")]
+    UiScroll,
     /// Pause the run and hand control to the human (login walls, CAPTCHAs). The
     /// agent never types credentials or solves CAPTCHAs itself (M11).
     #[serde(rename = "ui.human_takeover")]
@@ -125,7 +156,11 @@ impl StepType {
             | StepType::SysExec
             | StepType::SysQuitApp
             | StepType::SysClipboardGet
-            | StepType::SysClipboardSet => "system",
+            | StepType::SysClipboardSet
+            | StepType::SysListDir
+            | StepType::DataParseCsv
+            | StepType::DataParseJson
+            | StepType::HttpRequest => "system",
 
             StepType::UiCheckAccessibilityPermission
             | StepType::UiListApps
@@ -141,10 +176,14 @@ impl StepType {
             | StepType::UiListWindows
             | StepType::UiFocusWindow
             | StepType::UiSnapshot
-            | StepType::UiScreenshot => "ui",
+            | StepType::UiScreenshot
+            | StepType::UiScroll => "ui",
 
             // Control lane: handled by the engine/session itself, not dispatched.
-            StepType::UiHumanTakeover => "control",
+            StepType::UiHumanTakeover
+            | StepType::ControlForeach
+            | StepType::ControlIf
+            | StepType::ControlRepeatUntil => "control",
 
             // Browser lane
             StepType::BrowserNavigate
@@ -179,6 +218,13 @@ impl StepType {
             StepType::SysQuitApp => "sys.quit_app",
             StepType::SysClipboardGet => "sys.clipboard_get",
             StepType::SysClipboardSet => "sys.clipboard_set",
+            StepType::SysListDir => "sys.list_dir",
+            StepType::DataParseCsv => "data.parse_csv",
+            StepType::DataParseJson => "data.parse_json",
+            StepType::HttpRequest => "http.request",
+            StepType::ControlForeach => "control.foreach",
+            StepType::ControlIf => "control.if",
+            StepType::ControlRepeatUntil => "control.repeat_until",
             StepType::UiCheckAccessibilityPermission => "ui.check_accessibility_permission",
             StepType::UiListApps => "ui.list_apps",
             StepType::UiFocusApp => "ui.focus_app",
@@ -194,6 +240,7 @@ impl StepType {
             StepType::UiFocusWindow => "ui.focus_window",
             StepType::UiSnapshot => "ui.snapshot",
             StepType::UiScreenshot => "ui.screenshot",
+            StepType::UiScroll => "ui.scroll",
             StepType::UiHumanTakeover => "ui.human_takeover",
             // Browser lane
             StepType::BrowserNavigate => "browser.navigate",
@@ -237,6 +284,13 @@ impl std::str::FromStr for StepType {
             "sys.quit_app" => Ok(StepType::SysQuitApp),
             "sys.clipboard_get" => Ok(StepType::SysClipboardGet),
             "sys.clipboard_set" => Ok(StepType::SysClipboardSet),
+            "sys.list_dir" => Ok(StepType::SysListDir),
+            "data.parse_csv" => Ok(StepType::DataParseCsv),
+            "data.parse_json" => Ok(StepType::DataParseJson),
+            "http.request" => Ok(StepType::HttpRequest),
+            "control.foreach" => Ok(StepType::ControlForeach),
+            "control.if" => Ok(StepType::ControlIf),
+            "control.repeat_until" => Ok(StepType::ControlRepeatUntil),
             "ui.check_accessibility_permission" => Ok(StepType::UiCheckAccessibilityPermission),
             "ui.list_apps" => Ok(StepType::UiListApps),
             "ui.focus_app" => Ok(StepType::UiFocusApp),
@@ -252,6 +306,7 @@ impl std::str::FromStr for StepType {
             "ui.focus_window" => Ok(StepType::UiFocusWindow),
             "ui.snapshot" => Ok(StepType::UiSnapshot),
             "ui.screenshot" => Ok(StepType::UiScreenshot),
+            "ui.scroll" => Ok(StepType::UiScroll),
             "ui.human_takeover" => Ok(StepType::UiHumanTakeover),
             // Browser lane
             "browser.navigate" => Ok(StepType::BrowserNavigate),

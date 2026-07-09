@@ -1524,6 +1524,13 @@ fn cmd_plan_save(cli: &Cli, plan_file: &Path) -> Result<()> {
 /// Exits with an appropriate code reflecting the run outcome.
 fn cmd_exec(cli: &Cli, plan_id: &str) -> Result<()> {
     let store = open_store()?;
+    // Control-flow plans (M13) execute through the interpreter over a RunSession,
+    // not the flat engine loop.
+    if let Ok((_, plan)) = store.get_plan(plan_id) {
+        if operator_runtime::control::has_control_flow(&plan.steps) {
+            return run_control_plan(cli, &plan);
+        }
+    }
     let config = build_engine_config(cli)?;
     let data_dir = resolve_data_dir();
     let mut engine = Engine::new(store, config);
@@ -1680,6 +1687,72 @@ fn print_pause_hint_if_paused(store: &Store, summary: &RunSummary) {
     }
 }
 
+/// Executes a plan that contains `control.*` steps (M13) via the control-flow
+/// interpreter over a `RunSession` — each leaf step is gated/audited exactly as
+/// in flat execution. Confirmations are non-interactive here (like MCP/agent),
+/// so safe-mode medium/high steps need `--yes` or a grant.
+fn run_control_plan(cli: &Cli, plan: &Plan) -> Result<()> {
+    use operator_runtime::engine::RunSession;
+
+    let mut config = build_engine_config(cli)?;
+    // Mode ceiling: a plan may only make itself MORE restrictive.
+    if matches!(plan.mode, Some(Mode::Safe)) {
+        config.mode = Mode::Safe;
+    }
+    // Effective allow-lists = intersection of config and plan (most restrictive).
+    config.allow_apps = intersect_allow(&config.allow_apps, plan.allow_apps.as_deref());
+    config.allow_domains = intersect_allow(&config.allow_domains, plan.allow_domains.as_deref());
+
+    let store = open_store()?;
+    let data_dir = resolve_data_dir();
+    let mut session = RunSession::open(store, config, plan.grants.clone(), plan.budget.clone())
+        .map_err(|e| anyhow::anyhow!("failed to open control-flow session: {e}"))?;
+    let run_id = session.run_id().to_string();
+    let _ = write_pid_file(&data_dir, &run_id);
+
+    let vars = plan.variables.clone().unwrap_or_default();
+    let result = session.run_program(&plan.steps, vars);
+    let summary = session.finish();
+    let _ = remove_pid_file(&data_dir);
+
+    match result {
+        Ok(()) => {
+            print_run_summary(cli, &summary);
+            let code = exit_code_for_summary(&summary);
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
+        Err(e) => {
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::json!({ "error": e.to_string(), "run_id": run_id })
+                );
+            } else {
+                print_run_summary(cli, &summary);
+                eprintln!("Control flow stopped: {e}");
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Intersects a config allow-list with a plan allow-list. Empty means "allow
+/// all", so an empty side yields the other; two non-empty sides intersect.
+fn intersect_allow(config: &[String], plan: Option<&[String]>) -> Vec<String> {
+    match plan {
+        None => config.to_vec(),
+        Some(p) if config.is_empty() => p.to_vec(),
+        Some(p) => config
+            .iter()
+            .filter(|c| p.iter().any(|x| x.eq_ignore_ascii_case(c)))
+            .cloned()
+            .collect(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // cmd_run — validate, save, and execute a plan in one shot
 // ---------------------------------------------------------------------------
@@ -1743,6 +1816,11 @@ fn cmd_run(cli: &Cli, plan_file: Option<PathBuf>, instruction: Option<String>) -
         } else {
             println!("Plan saved: {}", plan_id);
         }
+    }
+
+    // Control-flow plans (M13) run through the interpreter over a RunSession.
+    if operator_runtime::control::has_control_flow(&plan.steps) {
+        return run_control_plan(cli, &plan);
     }
 
     // Execute (same logic as cmd_exec).
