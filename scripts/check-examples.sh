@@ -50,6 +50,7 @@ dry_run_skill() {
 dry_run_skill open-and-type --param app=TextEdit --param text=hello
 dry_run_skill create-note --param title=Test --param body=Body
 dry_run_skill take-screenshot
+dry_run_skill calendar-add-event --param summary=Standup
 
 if [[ "$fail" -ne 0 ]]; then
   echo "==> FAILED: one or more examples/skills did not validate" >&2

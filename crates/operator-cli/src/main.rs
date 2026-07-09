@@ -1380,6 +1380,21 @@ fn cmd_doctor(cli: &Cli) -> Result<()> {
             println!("               {} {}{}", mark, pt.display_name(), hint);
         }
 
+        // Native macOS lane (M14): Automation (AppleEvents) consent + Full Disk Access.
+        let fda = full_disk_access_probe();
+        println!(
+            "Full Disk Acc: {}",
+            if fda {
+                "GRANTED"
+            } else {
+                "not granted — needed for script.* against Mail/Messages data"
+            }
+        );
+        println!(
+            "Automation:    per-app consent — the first script.applescript/jxa to a given app"
+        );
+        println!("               triggers a one-time macOS approval dialog (AppleEvents / TCC)");
+
         if !do_ready {
             println!();
             println!("  `operator-jack do` needs an LLM provider. Either:");
@@ -2443,6 +2458,22 @@ fn resolve_log_dir() -> PathBuf {
 /// Returns the database path: `<data_dir>/operator-jack.db`.
 fn resolve_db_path() -> PathBuf {
     resolve_data_dir().join("operator-jack.db")
+}
+
+/// Best-effort Full Disk Access probe (M14): tries to list a TCC-protected
+/// directory (the user's Mail store). Success implies FDA is granted to this
+/// process; failure is the common case and is only informational.
+fn full_disk_access_probe() -> bool {
+    let home = match std::env::var("HOME") {
+        Ok(h) => h,
+        Err(_) => return false,
+    };
+    let protected = PathBuf::from(home).join("Library/Mail");
+    // If the path doesn't exist at all, we can't conclude — treat as not-granted.
+    if !protected.exists() {
+        return false;
+    }
+    std::fs::read_dir(&protected).is_ok()
 }
 
 // ---------------------------------------------------------------------------

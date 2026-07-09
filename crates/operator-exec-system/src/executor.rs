@@ -66,6 +66,9 @@ pub fn execute_system_step_with_timeout(
         StepType::DataParseCsv => exec_parse_csv(params),
         StepType::DataParseJson => exec_parse_json(params),
         StepType::HttpRequest => exec_http_request(params),
+        StepType::ScriptApplescript => exec_osascript(params, "AppleScript", exec_timeout_ms),
+        StepType::ScriptJxa => exec_osascript(params, "JavaScript", exec_timeout_ms),
+        StepType::ShortcutsRun => exec_shortcuts_run(params, exec_timeout_ms),
         _ => Err(SystemExecError::UnsupportedStep(step_type.to_string())),
     };
 
@@ -786,6 +789,47 @@ fn exec_http_request(params: &Value) -> Result<Value, SystemExecError> {
         "body": capped,
         "truncated": text.len() > capped.len(),
     }))
+}
+
+// ---------------------------------------------------------------------------
+// M14: script lane (AppleScript / JXA / Shortcuts) — via osascript/shortcuts
+// ---------------------------------------------------------------------------
+
+/// `script.applescript` / `script.jxa`: run a script through `osascript`,
+/// reusing `exec_command`'s timeout + output capture. `language` is
+/// "AppleScript" or "JavaScript" (JXA). The script body is passed as a single
+/// `-e` argument (multi-line scripts are fine).
+fn exec_osascript(
+    params: &Value,
+    language: &str,
+    timeout_ms: Option<u64>,
+) -> Result<Value, SystemExecError> {
+    let script = require_str(params, "script")?;
+    tracing::info!(language = %language, "script.{}", language.to_lowercase());
+    let exec_params = json!({
+        "command": "osascript",
+        "args": ["-l", language, "-e", script],
+    });
+    let mut out = exec_command(&exec_params, timeout_ms)?;
+    if let Some(obj) = out.as_object_mut() {
+        obj.insert("language".to_string(), json!(language));
+    }
+    Ok(out)
+}
+
+/// `shortcuts.run`: run a macOS Shortcut by name via the `shortcuts` CLI. An
+/// `input_path` (file) is passed through if given; inline text input is out of
+/// scope (most shortcuts take input from the clipboard/selection).
+fn exec_shortcuts_run(params: &Value, timeout_ms: Option<u64>) -> Result<Value, SystemExecError> {
+    let name = require_str(params, "name")?;
+    tracing::info!(shortcut = %name, "shortcuts.run");
+    let mut args = vec![json!("run"), json!(name)];
+    if let Some(input_path) = params.get("input_path").and_then(|v| v.as_str()) {
+        args.push(json!("--input-path"));
+        args.push(json!(expand_tilde(input_path)));
+    }
+    let exec_params = json!({ "command": "shortcuts", "args": args });
+    exec_command(&exec_params, timeout_ms)
 }
 
 // ---------------------------------------------------------------------------

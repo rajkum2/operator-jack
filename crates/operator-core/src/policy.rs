@@ -31,6 +31,9 @@ pub fn risk_level(step_type: &StepType) -> RiskLevel {
         | StepType::UiListWindows
         | StepType::UiSnapshot
         | StepType::UiScreenshot
+        // Document extraction is read-only.
+        | StepType::DocPdfText
+        | StepType::DocOcr
         // Control: orchestration only; the body's leaf steps are each gated on
         // their own risk when executed.
         | StepType::UiHumanTakeover
@@ -38,14 +41,18 @@ pub fn risk_level(step_type: &StepType) -> RiskLevel {
         | StepType::ControlIf
         | StepType::ControlRepeatUntil => RiskLevel::Low,
 
-        // High risk -- filesystem mutations and arbitrary command execution
+        // High risk -- filesystem mutations, arbitrary command/script execution
         StepType::SysWriteFile
         | StepType::SysAppendFile
         | StepType::SysMkdir
         | StepType::SysMovePath
         | StepType::SysCopyPath
         | StepType::SysDeletePath
-        | StepType::SysExec => RiskLevel::High,
+        | StepType::SysExec
+        // Scripts drive first-party apps with app-level authority — exec-grade.
+        | StepType::ScriptApplescript
+        | StepType::ScriptJxa
+        | StepType::ShortcutsRun => RiskLevel::High,
 
         // Medium risk -- everything else
         StepType::SysOpenApp

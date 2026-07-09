@@ -9,7 +9,7 @@
 ## Quick Start (For New Session)
 
 1. Read this file completely
-2. Read the roadmap: `MASTER_PLAN.md` (authoritative, M7-M15). Newest spec: `SPEC_FREEZE_V0.13.md` (M13 hands completion & deterministic control flow); prior: `SPEC_FREEZE_V0.12.md` (M12 web autonomy — browser lane wiring), `SPEC_FREEZE_V0.11.md` (M11 long-horizon & supervision), `SPEC_FREEZE_V0.10.md` (M10 native agent loop), `SPEC_FREEZE_V0.9.md` (M9 MCP server mode), `SPEC_FREEZE_V0.8.md` (M8 safety envelope), `SPEC_FREEZE_V0.7.md` (M7 perception), `SPEC_FREEZE_V0.6.md` (M5 browser), `SPEC_FREEZE_V0.5.md` (M6 skills, retroactive); base contract: `SPEC_FREEZE_V0.2.md`
+2. Read the roadmap: `MASTER_PLAN.md` (authoritative, M7-M15). Newest spec: `SPEC_FREEZE_V0.14.md` (M14 native macOS integration lane); prior: `SPEC_FREEZE_V0.13.md` (M13 hands completion & deterministic control flow), `SPEC_FREEZE_V0.12.md` (M12 web autonomy — browser lane wiring), `SPEC_FREEZE_V0.11.md` (M11 long-horizon & supervision), `SPEC_FREEZE_V0.10.md` (M10 native agent loop), `SPEC_FREEZE_V0.9.md` (M9 MCP server mode), `SPEC_FREEZE_V0.8.md` (M8 safety envelope), `SPEC_FREEZE_V0.7.md` (M7 perception), `SPEC_FREEZE_V0.6.md` (M5 browser), `SPEC_FREEZE_V0.5.md` (M6 skills, retroactive); base contract: `SPEC_FREEZE_V0.2.md`
 3. Check `VERSION_LOG` below for what changed last
 4. Check `CURRENT_STATE` below for what's built vs pending
 5. Check `NEXT_ACTIONS` for what to do next
@@ -34,6 +34,7 @@
 |------|---------|
 | `PROJECT_CONTEXT.md` | THIS FILE — resume context, version log, state tracker |
 | `MASTER_PLAN.md` | Authoritative forward roadmap (M7-M15) |
+| `SPEC_FREEZE_V0.14.md` | M14 spec — native macOS integration lane (`script.applescript`/`script.jxa`/`shortcuts.run` exec-grade, `doc.pdf_text` PDFKit, `doc.ocr` Vision, doctor Full Disk Access + Automation checks, calendar recipe skill) |
 | `SPEC_FREEZE_V0.13.md` | M13 spec — hands completion & deterministic control flow (data/net steps `sys.list_dir`/`data.parse_csv`/`data.parse_json`/`http.request`, `ui.scroll`, `control.foreach`/`if`/`repeat_until`) |
 | `SPEC_FREEZE_V0.12.md` | M12 spec — web autonomy (browser lane wired into plans/agent/MCP, profile isolation, browser.snapshot/get_text_all/get_attributes_all/download) |
 | `SPEC_FREEZE_V0.11.md` | M11 spec — long-horizon & supervision (Paused status, checkpoint/approval tables, ui.human_takeover, resume, logs --follow/prune) |
@@ -86,6 +87,17 @@
 ---
 
 ## VERSION_LOG
+
+### v0.15.0 — 2026-07-09
+**Status:** M14 COMPLETE (partial-scope — see item 7). Native macOS integration lane — a script lane (AppleScript/JXA/Shortcuts, exec-grade) and a read-only document lane (PDF text + OCR via PDFKit/Vision) that reach the parts of macOS the Accessibility tree can't. Crate count unchanged at 11. Swift handler registry 19 → 21. 164 Rust tests + 10 Swift tests pass.
+**Changes:**
+1. **Script lane (system lane, High risk, exec-grade)**: `script.applescript {script}` and `script.jxa {script}` run via `osascript -l AppleScript` / `-l JavaScript` (reusing the `sys.exec` timeout/capture path; return `{stdout, stderr, exit_code, language}`); `shortcuts.run {name, input_path?}` invokes the macOS `shortcuts` CLI. All three map to the `exec` grant capability (the script body / shortcut name is the match target), and the always-escalate classifier SCANS script bodies — `do shell script`, `administrator privileges`, `sudo`, `rm -rf`, and shelling out escalate to a human. The first `script.*` to an app triggers macOS's one-time Automation (AppleEvents) consent dialog.
+2. **Document lane (Swift helper / UI lane, Low risk, read-only)**: `doc.pdf_text {path, max_pages?}` extracts text via PDFKit → `{text, page_count, chars}`; `doc.ocr {path, fast?}` runs Vision's `VNRecognizeTextRequest` on-device/offline → `{text, line_count}` (also the perception fallback for scanned/image content). New Swift handlers `handlePdfText` / `handleOcr` (`Methods/Document.swift`), registered as `doc.pdf_text` / `doc.ocr`; Swift handler registry 19 → 21.
+3. **doctor**: gains a Full Disk Access probe (lists `~/Library/Mail`) and an Automation (AppleEvents) consent note (the first `script.*` to an app triggers a one-time macOS dialog).
+4. **Recipe skill + i18n guidance**: `skills/calendar-add-event.yaml` creates a Calendar event via `script.applescript` (params `summary` / `calendar` / `duration_minutes`; validates under `check-examples`); i18n guidance prefers identifier-based selectors (name-based selectors break on non-English macOS), and a US-layout audit of the `KeyPress.swift` keycode table is noted for the future.
+5. Version bumped to 0.15.0 (workspace + Swift `helperVersion`). Created `SPEC_FREEZE_V0.14.md` (M14 native macOS integration lane spec); added `skills/calendar-add-event.yaml`.
+6. **Verified live**: AppleScript `2+3` → `5`, JXA `6*7` → `42`, an AppleScript current-date returning the year; `doc.pdf_text` extracted a real PDF's text; `doc.ocr` OCR'd a rendered PNG → "INVOICE 42". Full gate green: `cargo fmt` clean, `cargo clippy -D warnings` clean, 164 Rust tests, 10 Swift tests, `check-examples.sh` all valid.
+7. **Known-partial (stated honestly)**: the "save all PDF attachments from unread invoices to a CSV" end-to-end recipe and the OCR-to-agent data-entry flow are ENABLED by these primitives but were NOT assembled/run as one scripted acceptance here (they need Mail data + Automation + Full Disk Access consent on the host); Mail/Finder recipe skills beyond Calendar are DEFERRED; `shortcuts.run` is wired but not exercised (no user Shortcuts on the host); the i18n keycode-table audit is documented, not applied.
 
 ### v0.14.0 — 2026-07-09
 **Status:** M13 COMPLETE (partial-scope — see item 7). Hands completion & deterministic control flow — data/network/filesystem steps, the first scroll verb, and deterministic control flow (foreach/if/repeat_until) that runs each leaf through a RunSession. Crate count unchanged at 11. 163 Rust tests + 10 Swift tests pass.
@@ -450,6 +462,15 @@
 - [x] docs/examples/control-flow-foreach.json
 - [x] 163 Rust tests + 10 Swift tests passing (v0.14.0)
 - [ ] M13 deferred (NOT started): remaining actuation verbs — right-click/double-click/hover/drag, coordinate `ui.click_at`/`ui.scroll_at` (Retina mapping), typed `ui.set_value` (bool/number), window management, Open/Save dialog helpers; resume-aware batches; skill-compiler stretch (see MASTER_PLAN.md)
+- [x] SPEC_FREEZE_V0.14.md (M14 native macOS integration lane spec)
+- [x] M14 script lane (system lane, High risk / exec-grade): `script.applescript {script}` / `script.jxa {script}` via `osascript -l AppleScript` / `-l JavaScript` (reuse the `sys.exec` timeout/capture path; return `{stdout, stderr, exit_code, language}`); `shortcuts.run {name, input_path?}` via the macOS `shortcuts` CLI; all three map to the `exec` grant (the script body / shortcut name is the match target); the always-escalate classifier SCANS script bodies (`do shell script` / `administrator privileges` / `sudo` / `rm -rf` / shelling out → human); first `script.*` to an app triggers macOS's one-time Automation (AppleEvents) consent
+- [x] M14 document lane (Swift helper / UI lane, Low risk / read-only): `doc.pdf_text {path, max_pages?}` (PDFKit → `{text, page_count, chars}`), `doc.ocr {path, fast?}` (Vision `VNRecognizeTextRequest`, on-device/offline → `{text, line_count}`; also the perception fallback for scanned/image content); new Swift handlers `handlePdfText` / `handleOcr` (`Methods/Document.swift`), registered `doc.pdf_text` / `doc.ocr`; Swift handler registry 19 → 21
+- [x] M14 doctor: Full Disk Access probe (lists `~/Library/Mail`) + Automation (AppleEvents) consent note (first `script.*` to an app triggers a one-time macOS dialog)
+- [x] M14 recipe skill: `skills/calendar-add-event.yaml` (Calendar event via `script.applescript`; params `summary` / `calendar` / `duration_minutes`; validates under `check-examples`)
+- [x] M14 i18n guidance: prefer identifier-based selectors (name-based break on non-English macOS); `KeyPress.swift` keycode-table US-layout audit noted for the future
+- [x] M14 verified live: AppleScript `2+3` → `5`, JXA `6*7` → `42`, AppleScript current-date → year; `doc.pdf_text` extracted a real PDF's text; `doc.ocr` OCR'd a rendered PNG → "INVOICE 42"
+- [x] 164 Rust tests + 10 Swift tests passing (v0.15.0)
+- [ ] M14 known-partial/deferred: the "save PDF attachments from unread invoices → CSV" end-to-end recipe and the OCR-to-agent data-entry flow are ENABLED but NOT assembled/run as one scripted acceptance here (need Mail data + Automation + Full Disk Access consent); Mail/Finder recipe skills beyond Calendar DEFERRED; `shortcuts.run` wired but not exercised (no user Shortcuts on host); i18n keycode-table audit documented, not applied
 
 ### Milestone Status
 
@@ -472,7 +493,8 @@
 | M11 | DONE | Long-horizon autonomy & supervision: pause/resume (`RunStatus::Paused`, checkpoint + approval tables), escalation→pause, `ui.human_takeover`, `run/agent --resume`, `approvals` CLI, `logs --follow`/`steer`/notifications, context compaction, `logs prune`, kill-switch hardening; verified live |
 | M12 | DONE | Web autonomy: browser lane wired into plans/agent/MCP, profile isolation (isolated per-run Chrome; `browser.real_profile` escalation), extraction verbs (`browser.get_text_all`/`get_attributes_all`/`snapshot`/`download`), sync↔async `browser_lane` bridge; verified live |
 | M13 | DONE | Hands completion & deterministic control flow: data/net steps (`sys.list_dir`, `data.parse_csv`/`parse_json`, `http.request`), `ui.scroll`, `control.foreach`/`if`/`repeat_until` (interpreter over RunSession); agent + MCP gain list_dir/parse_csv/parse_json/http_request (MCP → 27 tools); verified live (only `ui.scroll` of the actuation verbs landed — rest deferred) |
-| M14-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md — M14 native macOS lane (next), M15 trust/residency & measurement |
+| M14 | DONE | Native macOS integration lane: `script.applescript`/`jxa` + `shortcuts.run` (exec-grade grants, classifier scans script bodies), `doc.pdf_text` (PDFKit) + `doc.ocr` (Vision, on-device), doctor Full Disk Access + Automation checks, `calendar-add-event` recipe skill; verified live (Mail/Finder recipes + end-to-end invoice→CSV deferred; `shortcuts.run` not yet exercised) |
+| M15 | NOT STARTED | New roadmap in MASTER_PLAN.md — M15 trust, residency & measurement (next) |
 
 ---
 
@@ -480,12 +502,13 @@
 
 **Immediate next steps (in order) — see MASTER_PLAN.md for full detail:**
 
-1. **M14 — Native macOS integration lane (v0.15.0)** — `script.applescript`/`jxa`/`shortcuts.run` step types (exec-grade grants), Automation TCC handling in `doctor`, document steps (`doc.pdf_text`, `doc.ocr` via Vision.framework), recipe skills for Mail/Calendar/Finder.
-2. **M15 — Trust, residency & measurement (v0.16.0)** — see MASTER_PLAN.md.
+1. **M15 — Trust, residency & measurement (v0.16.0)** — see MASTER_PLAN.md.
+
+**Deferred from M14 (fold into a later native-lane pass):** Mail/Finder recipe skills beyond Calendar; the end-to-end "save all PDF attachments from unread invoices → CSV" recipe and the OCR-to-agent data-entry flow (enabled by the M14 primitives but not assembled/run here — need Mail data + Automation + Full Disk Access consent on the host); a live `shortcuts.run` exercise (no user Shortcuts on the host); the i18n `KeyPress.swift` keycode-table US-layout audit (documented, not applied).
 
 **Deferred from M13 (fold into a later hands pass):** the remaining actuation verbs — right-click/double-click/hover/drag, coordinate `ui.click_at`/`ui.scroll_at` (Retina mapping), typed `ui.set_value` (bool/number), window management, and Open/Save dialog helpers — plus resume-aware batches and the skill-compiler stretch.
 
-**MASTER_PLAN.md is the authoritative roadmap for M7-M15.** M0-M13 plus Phase B (v0.7.1) are complete (M13 partial-scope — see the deferrals above). M14 is next.
+**MASTER_PLAN.md is the authoritative roadmap for M7-M15.** M0-M14 plus Phase B (v0.7.1) are complete (M13 + M14 partial-scope — see the deferrals above). M15 is next.
 
 ---
 
@@ -534,4 +557,4 @@ When multiple AX elements match and no `index` is given: interactive mode prompt
 
 ---
 
-*Last updated: 2026-07-09 — M13 COMPLETE (v0.14.0), partial-scope. Hands completion & deterministic control flow: data/network/filesystem steps on the system lane (`sys.list_dir` glob+metadata, `data.parse_csv` RFC-4180-ish → row objects, `data.parse_json` RFC-6901 pointer, `http.request` blocking with a 30s timeout + 1 MiB cap, gated by the domain allow-list AND grants like `sys.open_url`); `ui.scroll` — the first scroll verb (new Swift handler `handleScroll`/`Methods/Scroll.swift`, registry 18 → 19); and deterministic control flow (`control.foreach`/`control.if`/`control.repeat_until`) whose bodies carry sub-steps inside `params` (flat plan schema unchanged), with `{left, op, right}` conditions, mandatory iteration caps (100k ceiling; repeat_until requires max_iterations) and nesting ≤ 16, `${var}`/`save_as`/foreach-loop-var+`__index` variables, and an interpreter (`operator-runtime::control`) that runs each leaf through `RunSession::execute_step` (same gate/secret/redaction/audit, each iteration independently audited) — `run`/`exec` auto-detect control-flow plans (flat plans keep the existing engine path). The agent loop and MCP catalog gained `list_dir`/`parse_csv`/`parse_json`/`http_request` (MCP → 27 tools, completing the M9 surface). Crate count unchanged at 11. Known-partial: only `ui.scroll` of the planned actuation verbs landed (right-click/double-click/hover/drag, coordinate clicks/scroll with Retina mapping, typed set_value, window management, Open/Save dialog helpers, resume-aware batches, and the skill-compiler stretch are deferred); `ui.scroll` is wired end-to-end but not yet live-exercised. M0-M13 plus Phase B done. 163 Rust tests + 10 Swift tests passing. Spec: SPEC_FREEZE_V0.13.md. Next: M14 (native macOS integration lane) per MASTER_PLAN.md.*
+*Last updated: 2026-07-09 — M14 COMPLETE (v0.15.0), partial-scope. Native macOS integration lane: a script lane on the system lane (High risk / exec-grade) — `script.applescript {script}` / `script.jxa {script}` via `osascript -l AppleScript` / `-l JavaScript` (reuse the `sys.exec` timeout/capture path; return `{stdout, stderr, exit_code, language}`) and `shortcuts.run {name, input_path?}` via the macOS `shortcuts` CLI, all mapping to the `exec` grant (body/name is the match target) with the always-escalate classifier now SCANNING script bodies (`do shell script` / `administrator privileges` / `sudo` / `rm -rf` / shelling out → human) and macOS's one-time Automation (AppleEvents) consent on first `script.*` to an app; and a read-only document lane on the Swift helper / UI lane (Low risk) — `doc.pdf_text {path, max_pages?}` (PDFKit → `{text, page_count, chars}`) and `doc.ocr {path, fast?}` (Vision `VNRecognizeTextRequest`, on-device/offline → `{text, line_count}`; also the perception fallback for scanned/image content), via new Swift handlers `handlePdfText`/`handleOcr` (`Methods/Document.swift`, Swift handler registry 19 → 21). `doctor` gains a Full Disk Access probe (lists `~/Library/Mail`) and an Automation consent note; added the `skills/calendar-add-event.yaml` recipe skill (Calendar event via `script.applescript`); i18n guidance prefers identifier-based selectors (name-based break on non-English macOS) with a `KeyPress.swift` keycode-table US-layout audit noted. Crate count unchanged at 11. Known-partial: the end-to-end "save PDF attachments from unread invoices → CSV" recipe and the OCR-to-agent data-entry flow are ENABLED but not assembled/run as one scripted acceptance here (need Mail data + Automation + Full Disk Access consent); Mail/Finder recipe skills beyond Calendar deferred; `shortcuts.run` wired but not exercised (no user Shortcuts on host); the i18n keycode-table audit is documented, not applied. M0-M14 plus Phase B done. 164 Rust tests + 10 Swift tests passing. Spec: SPEC_FREEZE_V0.14.md. Next: M15 (trust, residency & measurement) per MASTER_PLAN.md.*

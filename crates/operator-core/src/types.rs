@@ -54,6 +54,25 @@ pub enum StepType {
     #[serde(rename = "http.request")]
     HttpRequest,
 
+    // Script lane (M14) — first-party app automation via osascript/shortcuts.
+    /// Run an AppleScript (High risk; exec-grade grant; body policy-scanned).
+    #[serde(rename = "script.applescript")]
+    ScriptApplescript,
+    /// Run a JavaScript-for-Automation (JXA) script (same gating as AppleScript).
+    #[serde(rename = "script.jxa")]
+    ScriptJxa,
+    /// Run a macOS Shortcut by name.
+    #[serde(rename = "shortcuts.run")]
+    ShortcutsRun,
+
+    // Document lane (M14) — text extraction via the Swift helper.
+    /// Extract text from a PDF (PDFKit).
+    #[serde(rename = "doc.pdf_text")]
+    DocPdfText,
+    /// OCR an image / scanned document (Vision.framework, on-device).
+    #[serde(rename = "doc.ocr")]
+    DocOcr,
+
     // Control lane (M13) — deterministic control flow; bodies carry sub-steps.
     /// Iterate a collection, running the body per element.
     #[serde(rename = "control.foreach")]
@@ -160,7 +179,10 @@ impl StepType {
             | StepType::SysListDir
             | StepType::DataParseCsv
             | StepType::DataParseJson
-            | StepType::HttpRequest => "system",
+            | StepType::HttpRequest
+            | StepType::ScriptApplescript
+            | StepType::ScriptJxa
+            | StepType::ShortcutsRun => "system",
 
             StepType::UiCheckAccessibilityPermission
             | StepType::UiListApps
@@ -177,7 +199,10 @@ impl StepType {
             | StepType::UiFocusWindow
             | StepType::UiSnapshot
             | StepType::UiScreenshot
-            | StepType::UiScroll => "ui",
+            | StepType::UiScroll
+            // Document steps run in the Swift helper (PDFKit / Vision).
+            | StepType::DocPdfText
+            | StepType::DocOcr => "ui",
 
             // Control lane: handled by the engine/session itself, not dispatched.
             StepType::UiHumanTakeover
@@ -222,6 +247,11 @@ impl StepType {
             StepType::DataParseCsv => "data.parse_csv",
             StepType::DataParseJson => "data.parse_json",
             StepType::HttpRequest => "http.request",
+            StepType::ScriptApplescript => "script.applescript",
+            StepType::ScriptJxa => "script.jxa",
+            StepType::ShortcutsRun => "shortcuts.run",
+            StepType::DocPdfText => "doc.pdf_text",
+            StepType::DocOcr => "doc.ocr",
             StepType::ControlForeach => "control.foreach",
             StepType::ControlIf => "control.if",
             StepType::ControlRepeatUntil => "control.repeat_until",
@@ -288,6 +318,11 @@ impl std::str::FromStr for StepType {
             "data.parse_csv" => Ok(StepType::DataParseCsv),
             "data.parse_json" => Ok(StepType::DataParseJson),
             "http.request" => Ok(StepType::HttpRequest),
+            "script.applescript" => Ok(StepType::ScriptApplescript),
+            "script.jxa" => Ok(StepType::ScriptJxa),
+            "shortcuts.run" => Ok(StepType::ShortcutsRun),
+            "doc.pdf_text" => Ok(StepType::DocPdfText),
+            "doc.ocr" => Ok(StepType::DocOcr),
             "control.foreach" => Ok(StepType::ControlForeach),
             "control.if" => Ok(StepType::ControlIf),
             "control.repeat_until" => Ok(StepType::ControlRepeatUntil),

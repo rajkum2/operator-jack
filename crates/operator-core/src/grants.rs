@@ -182,6 +182,14 @@ fn grant_checks_for_step(
             v
         }
         StepType::SysExec => vec![(Capability::Exec, reconstruct_cmdline(params))],
+        // Scripts/shortcuts are exec-grade: gate on the `exec` capability using
+        // the script body / shortcut name as the match target.
+        StepType::ScriptApplescript | StepType::ScriptJxa => s("script")
+            .map(|body| vec![(Capability::Exec, body)])
+            .unwrap_or_else(|| vec![(Capability::Exec, String::new())]),
+        StepType::ShortcutsRun => s("name")
+            .map(|n| vec![(Capability::Exec, format!("shortcuts run {n}"))])
+            .unwrap_or_else(|| vec![(Capability::Exec, String::new())]),
         StepType::SysOpenUrl | StepType::BrowserNavigate | StepType::HttpRequest => s("url")
             .map(|u| vec![(Capability::Domain, u)])
             .unwrap_or_default(),
@@ -223,6 +231,29 @@ pub fn check_escalation(step_type: &StepType, params: &serde_json::Value) -> Opt
             if first == "sudo" || lc.contains(" sudo ") || lc.contains("rm -rf") || pipes_to_shell {
                 Some(Escalation {
                     reason: format!("sys.exec runs a high-consequence command: `{cmd}`"),
+                })
+            } else {
+                None
+            }
+        }
+        StepType::ScriptApplescript | StepType::ScriptJxa => {
+            // Scan the script body like an exec command: `do shell script`,
+            // admin-privilege requests, and shelling out are high-consequence.
+            let body = params
+                .get("script")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_lowercase();
+            let dangerous = body.contains("do shell script")
+                || body.contains("administrator privileges")
+                || body.contains("with prompt") && body.contains("privileges")
+                || body.contains("sudo")
+                || body.contains("rm -rf")
+                || body.contains("osascript");
+            if dangerous {
+                Some(Escalation {
+                    reason: "script runs a high-consequence action (shell/admin privileges)"
+                        .to_string(),
                 })
             } else {
                 None
@@ -506,6 +537,35 @@ mod tests {
             &json!({"command": "ls", "args": ["-la"]})
         )
         .is_none());
+    }
+
+    #[test]
+    fn escalation_flags_dangerous_scripts() {
+        // A script that shells out or requests admin privileges escalates.
+        assert!(check_escalation(
+            &StepType::ScriptApplescript,
+            &json!({"script": "do shell script \"rm -rf /tmp/x\""})
+        )
+        .is_some());
+        assert!(check_escalation(
+            &StepType::ScriptApplescript,
+            &json!({"script": "do shell script \"whoami\" with administrator privileges"})
+        )
+        .is_some());
+        // A benign script does not escalate.
+        assert!(check_escalation(
+            &StepType::ScriptApplescript,
+            &json!({"script": "return 2 + 3"})
+        )
+        .is_none());
+        // Scripts map to the exec capability for grants.
+        let g = grants(&[], &["osascript*"], &[]);
+        assert!(check_grants(
+            &StepType::ScriptJxa,
+            &json!({"script": "Application('Finder').name()"}),
+            &[&g]
+        )
+        .is_err()); // body doesn't match the exec pattern → denied
     }
 
     #[test]

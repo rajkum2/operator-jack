@@ -6,7 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-See [`MASTER_PLAN.md`](MASTER_PLAN.md) for the authoritative roadmap. Next: M14 (native macOS integration lane).
+See [`MASTER_PLAN.md`](MASTER_PLAN.md) for the authoritative roadmap. Next: M15 (trust, residency & measurement).
+
+## [0.15.0] - 2026-07-09
+
+M14 — Native macOS integration lane. A script lane (AppleScript/JXA/Shortcuts) and a read-only document lane (PDF text + OCR) that let plans and the agent reach the parts of macOS the Accessibility tree can't — app scripting dictionaries, Shortcuts, and the text inside PDFs and scanned images.
+
+### Added
+- **Script lane** (system lane, High risk, exec-grade): `script.applescript {script}` and `script.jxa {script}` run via `osascript -l AppleScript` / `-l JavaScript` (reusing the `sys.exec` timeout/capture path; return `{stdout, stderr, exit_code, language}`); `shortcuts.run {name, input_path?}` invokes the macOS `shortcuts` CLI. All three map to the `exec` grant capability (the script body / shortcut name is the match target), and the always-escalate classifier now SCANS script bodies — `do shell script`, `administrator privileges`, `sudo`, `rm -rf`, and shelling out escalate to a human.
+- **Document lane** (Swift helper / UI lane, Low risk, read-only): `doc.pdf_text {path, max_pages?}` extracts text via PDFKit → `{text, page_count, chars}`; `doc.ocr {path, fast?}` runs Vision's `VNRecognizeTextRequest` on-device/offline → `{text, line_count}` (also the perception fallback for scanned/image content). New Swift handlers `handlePdfText` / `handleOcr` (`Methods/Document.swift`), registered as `doc.pdf_text` / `doc.ocr`; Swift handler registry 19 → 21.
+- **`doctor`** gains a Full Disk Access probe (lists `~/Library/Mail`) and an Automation (AppleEvents) consent note (the first `script.*` to an app triggers a one-time macOS dialog).
+- **Recipe skill**: `skills/calendar-add-event.yaml` (creates a Calendar event via `script.applescript`; params `summary` / `calendar` / `duration_minutes`; validates under `check-examples`).
+- **i18n guidance**: prefer identifier-based selectors (name-based selectors break on non-English macOS); a US-layout audit of the `KeyPress.swift` keycode table is noted for the future.
+- SPEC_FREEZE_V0.14.md (M14 native macOS integration lane spec).
+
+### Note
+- Verified live: AppleScript `2+3` → `5`, JXA `6*7` → `42`, an AppleScript current-date returning the year; `doc.pdf_text` extracted a real PDF's text; `doc.ocr` OCR'd a rendered PNG → "INVOICE 42". Full gate green: `cargo fmt`, `cargo clippy -D warnings`, 164 Rust tests, 10 Swift tests, and `check-examples.sh` all pass. Version 0.14.0 → 0.15.0 (workspace + Swift `helperVersion`).
+- Known-partial: the "save all PDF attachments from unread invoices to a CSV" end-to-end recipe and the OCR-to-agent data-entry flow are ENABLED by these primitives but were not assembled/run as one scripted acceptance here (they need Mail data + Automation + Full Disk Access consent on the host); Mail/Finder recipe skills beyond Calendar are DEFERRED; `shortcuts.run` is wired but not exercised (no user Shortcuts on the host); the i18n keycode-table audit is documented, not applied.
 
 ## [0.14.0] - 2026-07-09
 

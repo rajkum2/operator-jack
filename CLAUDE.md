@@ -21,7 +21,7 @@ export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 # Build Rust workspace
 cd /Users/kirankumaralugonda/operator-jack && cargo build
 
-# Run Rust tests (163 tests)
+# Run Rust tests (164 tests)
 cargo test
 
 # Build Swift helper and run Swift tests (10 tests)
@@ -82,6 +82,8 @@ operator-jack/
 - **System lane** (`sys.*`): Rust-native, runs on worker thread with timeout
 - **UI lane** (`ui.*`): Dispatched to Swift helper via NDJSON IPC. Includes `ui.scroll` (M13) — the first scroll verb; the Swift handler posts scroll-wheel CGEvents (params `app`, `dy`, `dx`, `clicks`, `to: "top"|"bottom"`).
 - **Data/network** (`sys.list_dir`, `data.parse_csv`, `data.parse_json`, `http.request`): Rust-native on the system lane (M13). `sys.list_dir {path, pattern?}` (glob + metadata, name-sorted); `data.parse_csv {text|path, headers?}` (RFC-4180-ish — quoted fields, embedded commas, `""` escapes → row objects); `data.parse_json {text|path, pointer?}` (RFC-6901 JSON pointer); `http.request {url, method?, headers?, body?}` (blocking, 30s timeout, 1 MiB body cap; gated by the domain allow-list AND grants, like `sys.open_url`).
+- **Script lane** (`script.applescript`, `script.jxa`, `shortcuts.run`): Rust-native on the system lane (M14), **High risk / exec-grade**. `script.applescript {script}` and `script.jxa {script}` run via `osascript -l AppleScript` / `-l JavaScript` (reusing the `sys.exec` timeout/capture path; return `{stdout, stderr, exit_code, language}`); `shortcuts.run {name, input_path?}` invokes the macOS `shortcuts` CLI. All three map to the `exec` grant capability (the script body / shortcut name is the match target), and the always-escalate classifier SCANS script bodies — `do shell script`, `administrator privileges`, `sudo`, `rm -rf`, and shelling out escalate to a human. The first `script.*` to an app triggers macOS's one-time Automation (AppleEvents) consent dialog.
+- **Document lane** (`doc.pdf_text`, `doc.ocr`): dispatched to the Swift helper (UI lane) (M14), **Low risk / read-only**. `doc.pdf_text {path, max_pages?}` extracts text via PDFKit → `{text, page_count, chars}`; `doc.ocr {path, fast?}` runs Vision's `VNRecognizeTextRequest` on-device/offline → `{text, line_count}` (also the perception fallback for scanned/image content). Swift handlers `handlePdfText` / `handleOcr` in `Methods/Document.swift`.
 - **Browser lane** (`browser.*`): CDP executor (M5) now wired into plans, the agent loop, and MCP as of M12. The lane launches its OWN isolated Chrome via a per-run `BrowserHandle` (lazily spawned on the first browser step, torn down at run end) with a dedicated `--user-data-dir` — ephemeral per-run by default (removed on close) or a named persistent profile — never the user's real logged-in profile; it refuses to attach to a Chrome it didn't launch unless the escalating `browser.real_profile` capability is granted. Headless by default (headed available for human takeover). The sync engine talks to the async CDP client over std channels via `operator-runtime::browser_lane` (a dedicated OS thread running its own multi-threaded tokio runtime), so it is safe from the sync CLI and from within any other runtime (no nested-runtime panic).
 - **Control lane** (`control.foreach`/`control.if`/`control.repeat_until`, `ui.human_takeover`): Rust-native, not dispatched to any helper. **Deterministic control flow** (M13): bodies carry sub-steps inside `params` (the flat plan schema is unchanged); conditions are `{left, op, right}` (ops `== != < <= > >= contains exists empty`, numeric or string compare); iteration caps are mandatory (100k hard ceiling; `repeat_until` requires `max_iterations`) and nesting is bounded at 16; variables `${var}` interpolate type-preserving, `save_as` binds a leaf's output, `foreach` binds the loop var + `__index`. The interpreter (`operator-runtime::control`) runs each leaf through `RunSession::execute_step` (same gate / `{{secret:*}}` resolution / redaction / audit; each iteration independently audited); `operator-jack run`/`exec` auto-detect control-flow plans and route them through the interpreter over a RunSession (flat plans keep the existing engine path). Control-flow plans are non-interactive for confirmations (they need `--yes` or a grant for safe-mode medium/high steps). **`ui.human_takeover`** (M11): an interactive run blocks for Enter; a non-interactive run pauses (checkpoint + approval) for out-of-band resume; the agent loop can emit it. Risk Low.
 
@@ -113,7 +115,7 @@ operator-jack/
 - `path` is a real matcher: suffix match on the computed traversal path (implemented in M7; was rejected-when-alone in Phase B)
 
 ### Testing
-- Rust: `cargo test` — unit tests in each crate's source files (163 tests)
+- Rust: `cargo test` — unit tests in each crate's source files (164 tests)
 - Swift: `cd macos-helper && swift test` — XCTest target at `Tests/OperatorMacOSHelperTests/` (10 tests; selector parsing + criteria). AX-dependent behavior is covered by the live acceptance harness.
 - Acceptance: `make check-examples` validates every golden plan in `docs/examples/` and dry-run-expands every skill. **No example or skill ships without passing it.** Run a plan live via `operator-jack run --plan-file <path> --mode unsafe --yes`.
 
@@ -150,7 +152,8 @@ operator-jack/
 | M11 | DONE | Long-horizon & supervision (pause/resume, approvals, human_takeover, steer, logs --follow/prune) |
 | M12 | DONE | Web autonomy: browser lane wired into plans/agent/MCP, profile isolation, extraction verbs |
 | M13 | DONE | Data/net steps (list_dir, parse_csv/json, http.request), ui.scroll, deterministic control flow (foreach/if/repeat_until) |
-| M14-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md (M14=native macOS lane, M15=trust/residency) |
+| M14 | DONE | Native macOS lane: script.applescript/jxa, shortcuts.run, doc.pdf_text (PDFKit), doc.ocr (Vision), doctor TCC checks, calendar recipe skill |
+| M15 | NOT STARTED | New roadmap in MASTER_PLAN.md (M15=trust/residency) |
 
 > M13 note: only `ui.scroll` of the planned actuation verbs landed — right-click/double-click/hover/drag, coordinate clicks/scroll, typed `set_value`, window management, and Open/Save dialog helpers are deferred (see MASTER_PLAN.md / PROJECT_CONTEXT.md).
 
@@ -165,7 +168,7 @@ operator-jack/
 7. **Two-mode policy.** Safe (confirm medium+high) / Unsafe (allow all). Not three-tier. M8 adds task-scoped grants + run budgets + an always-escalate classifier on top (see SPEC_FREEZE_V0.8.md).
 8. **Raw ApplicationServices.** No AXSwift. Direct AXUIElement* API calls.
 
-## Current Handler Registry (19 handlers)
+## Current Handler Registry (21 handlers)
 
 | IPC Method | Handler | File |
 |-----------|---------|------|
@@ -188,6 +191,8 @@ operator-jack/
 | ui.snapshot | handleSnapshot | Methods/Snapshot.swift |
 | ui.screenshot | handleScreenshot | Methods/Screenshot.swift |
 | ui.checkScreenRecordingPermission | handleCheckScreenRecording | Methods/Screenshot.swift |
+| doc.pdf_text | handlePdfText | Methods/Document.swift |
+| doc.ocr | handleOcr | Methods/Document.swift |
 
 ## CLI Commands
 

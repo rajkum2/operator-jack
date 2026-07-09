@@ -154,6 +154,12 @@ pub fn validate_step_params(
         StepType::DataParseCsv => Ok(()),
         StepType::DataParseJson => Ok(()),
         StepType::HttpRequest => require_string_param(params, "url"),
+        // Script lane (M14).
+        StepType::ScriptApplescript | StepType::ScriptJxa => require_string_param(params, "script"),
+        StepType::ShortcutsRun => require_string_param(params, "name"),
+        // Document lane (M14).
+        StepType::DocPdfText => require_string_param(params, "path"),
+        StepType::DocOcr => require_string_param(params, "path"),
         StepType::UiCheckAccessibilityPermission => Ok(()),
         StepType::UiListApps => Ok(()),
         StepType::UiFocusApp => require_string_param(params, "app"),
