@@ -15,6 +15,7 @@ operator-ipc = { path = "../operator-ipc" }
 operator-planner = { path = "../operator-planner" }
 operator-skills = { path = "../operator-skills" }
 operator-exec-browser = { path = "../operator-exec-browser" }
+operator-mcp = { path = "../operator-mcp" }
 clap = { version = "4", features = ["derive"] }
 anyhow.workspace = true
 serde_json.workspace = true

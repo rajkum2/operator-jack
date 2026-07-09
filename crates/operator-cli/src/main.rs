@@ -170,6 +170,23 @@ enum Commands {
         #[command(subcommand)]
         action: SecretAction,
     },
+
+    /// MCP server mode (M9) — expose gated executors as MCP tools over stdio
+    Mcp {
+        #[command(subcommand)]
+        action: McpAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum McpAction {
+    /// Serve the MCP protocol on stdio (connect an MCP client to this process).
+    Serve {
+        /// Path to a JSON file with the session's grants envelope
+        /// (e.g. {"fs_write":["~/scraped/**"],"exec":["pip install *"]}).
+        #[arg(long)]
+        grants: Option<std::path::PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -363,6 +380,82 @@ fn main() -> Result<()> {
             SecretAction::List => cmd_secret_list(&cli),
             SecretAction::Rm { name } => cmd_secret_rm(&cli, name),
         },
+        Commands::Mcp { ref action } => match action {
+            McpAction::Serve { grants } => cmd_mcp_serve(&cli, grants.as_deref()),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// cmd_mcp_serve — MCP server over stdio (M9)
+// ---------------------------------------------------------------------------
+
+/// Serves the MCP protocol on stdio. An MCP client drives Operator Jack's
+/// executors as tools; every tool call runs through a `RunSession` (the same
+/// grants / escalation / redaction / audit as plan execution).
+///
+/// Because stdio is the protocol channel, there is no interactive terminal for
+/// confirmation prompts — so the session auto-approves confirmations and relies
+/// on **grants + the escalation classifier + secure-field refusal** for safety.
+/// All diagnostics and the grant preview go to stderr; stdout is protocol-only.
+fn cmd_mcp_serve(cli: &Cli, grants_file: Option<&Path>) -> Result<()> {
+    use operator_core::grants::Grants;
+
+    let mut config = build_engine_config(cli)?;
+    // No interactive confirmations are possible over stdio; safety comes from
+    // the grant envelope + escalation classifier, not per-step prompts.
+    config.yes_to_all = true;
+    config.interactive = false;
+
+    // Resolve the session grant envelope: --grants file overrides config grants.
+    let session_grants: Option<Grants> = if let Some(path) = grants_file {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read grants file {}", path.display()))?;
+        let g: Grants = serde_json::from_str(&text)
+            .with_context(|| format!("failed to parse grants file {}", path.display()))?;
+        Some(g)
+    } else {
+        config.grants.take()
+    };
+    // Avoid double-applying: the session grants are the single envelope layer.
+    config.grants = None;
+
+    // Grant preview (to stderr — stdout is the protocol channel).
+    eprintln!("operator-jack MCP server (protocol on stdio)");
+    print_grant_preview(session_grants.as_ref());
+    eprintln!("  Escalation rules and secure-field refusal always apply.");
+
+    let store = open_store()?;
+    let session = operator_runtime::engine::RunSession::open(store, config, session_grants, None)
+        .map_err(|e| anyhow::anyhow!("failed to open MCP session: {e}"))?;
+    operator_mcp::serve(session).context("MCP server error")?;
+    Ok(())
+}
+
+/// Prints the effective grant envelope to stderr so the operator sees what the
+/// session may do before tools unlock.
+fn print_grant_preview(grants: Option<&operator_core::grants::Grants>) {
+    match grants {
+        Some(g) if !g.is_unrestricted() => {
+            eprintln!("This session may:");
+            let show = |label: &str, pats: &Option<Vec<String>>| {
+                if let Some(p) = pats {
+                    eprintln!("  {label}: {}", p.join(", "));
+                }
+            };
+            show("fs_read ", &g.fs_read);
+            show("fs_write", &g.fs_write);
+            show("exec    ", &g.exec);
+            show("domains ", &g.domains);
+            eprintln!("  (a capability with no grant listed above is unrestricted)");
+        }
+        _ => {
+            eprintln!(
+                "⚠  UNRESTRICTED session: no grants set — file reads/writes, commands, and any \
+                 domain are allowed."
+            );
+            eprintln!("   Pass --grants <file> to bound this session.");
+        }
     }
 }
 

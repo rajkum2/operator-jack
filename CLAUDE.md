@@ -21,7 +21,7 @@ export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 # Build Rust workspace
 cd /Users/kirankumaralugonda/operator-jack && cargo build
 
-# Run Rust tests (142 tests)
+# Run Rust tests (143 tests)
 cargo test
 
 # Build Swift helper and run Swift tests (10 tests)
@@ -45,7 +45,8 @@ operator-jack/
 │   ├── operator-exec-browser/# browser.* CDP executor (M5) - tokio-tungstenite + reqwest
 │   ├── operator-ipc/        # NDJSON IPC client for Swift helper
 │   ├── operator-planner/    # LLM planner (M4) - Kimi/OpenAI/Anthropic/Ollama providers
-│   └── operator-skills/     # Skill manifests (M6) - parse/validate/expand to plans
+│   ├── operator-skills/     # Skill manifests (M6) - parse/validate/expand to plans
+│   └── operator-mcp/        # MCP server (M9) - JSON-RPC over stdio, tools → RunSession
 ├── macos-helper/            # Swift SPM package
 │   ├── Sources/OperatorMacOSHelper/
 │   │   ├── main.swift       # NDJSON server loop, handler registration
@@ -109,13 +110,14 @@ operator-jack/
 - `path` is a real matcher: suffix match on the computed traversal path (implemented in M7; was rejected-when-alone in Phase B)
 
 ### Testing
-- Rust: `cargo test` — unit tests in each crate's source files (142 tests)
+- Rust: `cargo test` — unit tests in each crate's source files (143 tests)
 - Swift: `cd macos-helper && swift test` — XCTest target at `Tests/OperatorMacOSHelperTests/` (10 tests; selector parsing + criteria). AX-dependent behavior is covered by the live acceptance harness.
 - Acceptance: `make check-examples` validates every golden plan in `docs/examples/` and dry-run-expands every skill. **No example or skill ships without passing it.** Run a plan live via `operator-jack run --plan-file <path> --mode unsafe --yes`.
 
 ## Spec Files
 
 - **MASTER_PLAN.md** — Authoritative forward roadmap (M7-M15). Read this for what's next.
+- **SPEC_FREEZE_V0.9.md** — M9 delta: MCP server mode (`RunSession` ad-hoc gated single-step execution, `mcp serve`, 15-tool surface over JSON-RPC-over-stdio)
 - **SPEC_FREEZE_V0.8.md** — M8 delta: safety envelope (task-scoped grants, run budgets + `Partial` status, always-escalate classifier, redaction hardening)
 - **SPEC_FREEZE_V0.7.md** — M7 delta: observation API (`ui.snapshot`/`ui.screenshot`, element refs, Electron/Chromium AX enablement, `path` selector matching)
 - **SPEC_FREEZE_V0.6.md** — M5 delta: browser lane (`browser.*` step types, CDP, tokio, Chrome process management, `allow_domains` for browser)
@@ -140,11 +142,12 @@ operator-jack/
 | Phase B | DONE | Stabilization (v0.7.1): audit fixes, Swift correctness, security fixes, docs |
 | M7 | DONE | Perception: ui.snapshot (compact AX + refs), ui.screenshot, Electron AX enablement, path selectors, doctor screen-recording check |
 | M8 | DONE | Safety envelope: task-scoped grants (fs/exec/domains), run budgets + Partial status, always-escalate classifier, secure-field refusal, redaction hardening, exit code 3, Keychain secret store (`{{secret:name}}` injection, `secret` CLI) |
-| M9-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md (M9=MCP [next], M10=agent loop, M11=long-horizon, M12=browser wiring, M13=control flow, M14=AppleScript/OCR, M15=trust) |
+| M9 | DONE | MCP server mode: RunSession (ad-hoc gated single-step exec), operator-mcp crate (JSON-RPC-over-stdio, 15 tools), `operator-jack mcp serve --grants`, session-as-run audit |
+| M10-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md (M10=agent loop [next], M11=long-horizon, M12=browser wiring, M13=control flow, M14=AppleScript/OCR, M15=trust) |
 
 ## Important Rules
 
-1. **Spec is normative.** Check the relevant SPEC_FREEZE (V0.2 base; V0.3 UI; V0.4 planner; V0.5 skills; V0.6 browser; V0.7 observation; V0.8 safety envelope) before inventing behavior; check MASTER_PLAN.md for anything M9+.
+1. **Spec is normative.** Check the relevant SPEC_FREEZE (V0.2 base; V0.3 UI; V0.4 planner; V0.5 skills; V0.6 browser; V0.7 observation; V0.8 safety envelope; V0.9 MCP) before inventing behavior; check MASTER_PLAN.md for anything M10+.
 2. **Async allowed (M5+).** tokio is now a dependency (`operator-cli`, `operator-exec-browser`) for the browser/CDP lane. The old "no async / no tokio" rule is obsolete.
 3. **Every change must compile.** Run `cargo build && cargo test && cd macos-helper && swift build`.
 4. **Update PROJECT_CONTEXT.md** after completing milestones.
@@ -223,6 +226,17 @@ operator-jack secret rm <name>                 # Remove a secret
 ```
 Reference a secret in any plan/skill param as `{{secret:name}}`; the engine
 resolves it at execution time and never persists the literal value.
+
+### MCP Server (M9)
+```
+operator-jack mcp serve [--grants <file>]   # Serve MCP over stdio (connect an MCP client)
+```
+Exposes 15 gated tools (snapshot, screenshot, click, type_text, key_press, set_value,
+select_menu, read_text, wait_for, list_apps, focus_app, open_app, read_file, write_file,
+exec) over newline-delimited JSON-RPC 2.0. Each tool call runs as one `RunSession` step —
+same policy gate, escalation classifier, `{{secret:*}}` resolution, redaction, and audit
+as plan execution. The effective grant envelope is printed to STDERR before serving
+(stdout is protocol-only); denied calls return `isError` and the session continues.
 
 ## Common Flags
 

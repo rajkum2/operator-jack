@@ -6,7 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-See [`MASTER_PLAN.md`](MASTER_PLAN.md) for the authoritative roadmap. Next: M9 (MCP server mode).
+See [`MASTER_PLAN.md`](MASTER_PLAN.md) for the authoritative roadmap. Next: M10 (native agent loop).
+
+## [0.10.0] - 2026-07-09
+
+M9 — MCP server mode. Operator Jack's gated executors exposed as MCP tools so any MCP client (Claude Code/Desktop, others) can drive the audited hands — "brain rented, hands owned".
+
+### Added
+- **RunSession** (`operator_runtime::engine::RunSession`) — an ad-hoc single-step gated execution primitive (`open` → `execute_step(&Step)` → `finish`). Each step runs through the same policy gate (grants, escalation classifier), `{{secret:*}}` resolution, store-boundary redaction, and audit as plan execution; it holds a persistent helper connection so snapshot element-refs survive across calls, and records one run per session. `execute_plan` is unchanged — both share the security-critical helpers. This is the shared substrate M10's agent loop will consume.
+- `operator-mcp` crate and `operator-jack mcp serve [--grants <file>]` — a hand-rolled, spec-compliant MCP server over stdio (newline-delimited JSON-RPC 2.0: `initialize`, `tools/list`, `tools/call`, `ping`), exposing **15 tools**: `snapshot`, `screenshot`, `click`, `type_text`, `key_press`, `set_value`, `select_menu`, `read_text`, `wait_for`, `list_apps`, `focus_app`, `open_app`, `read_file`, `write_file`, `exec` (click/read_text/set_value take a selector or an element_ref from a prior snapshot). The server prints the effective grant envelope ("this session may: …") to STDERR before serving (stdout is protocol-only) and warns if unrestricted; because stdio is the protocol channel, the session auto-approves confirmations and relies on the grant envelope + escalation classifier + secure-field refusal for safety.
+- Every MCP tool call is gated and audited through RunSession as one session-run — grants, the escalation classifier, redaction, and the audit trail apply to model-driven actions exactly as to plan steps. A denied call returns `isError` (the session continues), not a JSON-RPC error. Verified live: a `write_file` inside an fs_write grant succeeded, while the same write outside the grant returned `isError` ("Grant required: 'fs_write'") with no file created.
+- SPEC_FREEZE_V0.9.md (M9 MCP server spec).
+
+### Note
+- The MCP server is hand-rolled rather than built on the `rmcp` Rust SDK: rmcp's async/Send bounds don't fit the synchronous RunSession (rusqlite + child-process pipes). This is a deliberate, documented choice — rmcp can be adopted later without changing the tool surface.
 
 ## [0.9.1] - 2026-07-08
 

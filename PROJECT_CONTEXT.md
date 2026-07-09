@@ -9,7 +9,7 @@
 ## Quick Start (For New Session)
 
 1. Read this file completely
-2. Read the roadmap: `MASTER_PLAN.md` (authoritative, M7-M15). Newest spec: `SPEC_FREEZE_V0.8.md` (M8 safety envelope); prior: `SPEC_FREEZE_V0.7.md` (M7 perception), `SPEC_FREEZE_V0.6.md` (M5 browser), `SPEC_FREEZE_V0.5.md` (M6 skills, retroactive); base contract: `SPEC_FREEZE_V0.2.md`
+2. Read the roadmap: `MASTER_PLAN.md` (authoritative, M7-M15). Newest spec: `SPEC_FREEZE_V0.9.md` (M9 MCP server mode); prior: `SPEC_FREEZE_V0.8.md` (M8 safety envelope), `SPEC_FREEZE_V0.7.md` (M7 perception), `SPEC_FREEZE_V0.6.md` (M5 browser), `SPEC_FREEZE_V0.5.md` (M6 skills, retroactive); base contract: `SPEC_FREEZE_V0.2.md`
 3. Check `VERSION_LOG` below for what changed last
 4. Check `CURRENT_STATE` below for what's built vs pending
 5. Check `NEXT_ACTIONS` for what to do next
@@ -34,6 +34,7 @@
 |------|---------|
 | `PROJECT_CONTEXT.md` | THIS FILE — resume context, version log, state tracker |
 | `MASTER_PLAN.md` | Authoritative forward roadmap (M7-M15) |
+| `SPEC_FREEZE_V0.9.md` | M9 spec — MCP server mode (RunSession, mcp serve, 15-tool surface over JSON-RPC-over-stdio) |
 | `SPEC_FREEZE_V0.8.md` | M8 spec — safety envelope (grants, budgets + Partial status, escalation classifier, redaction hardening) |
 | `SPEC_FREEZE_V0.7.md` | M7 spec — observation API (ui.snapshot/ui.screenshot, refs, Electron AX, path selectors) |
 | `SPEC_FREEZE_V0.6.md` | M5 spec delta — browser executor / CDP |
@@ -51,6 +52,7 @@
 | `crates/operator-ipc/` | NDJSON IPC client for Swift helper |
 | `crates/operator-planner/` | LLM planner (M4) — Kimi/OpenAI/Anthropic/Ollama |
 | `crates/operator-skills/` | Skills system (M6) — manifest parse/validate/expand |
+| `crates/operator-mcp/` | MCP server (M9) — JSON-RPC over stdio, tools → RunSession |
 | `macos-helper/` | Swift SPM package for AX automation |
 | `docs/` | Architecture, security, selectors, permissions, roadmap |
 | `docs/examples/` | Example plan JSON files |
@@ -79,6 +81,17 @@
 ---
 
 ## VERSION_LOG
+
+### v0.10.0 — 2026-07-09
+**Status:** M9 COMPLETE. MCP server mode — Operator Jack's gated executors exposed as MCP tools so any MCP client (Claude Code/Desktop) can drive the audited hands ("brain rented, hands owned"). Workspace grows to 10 crates. 143 Rust tests + 10 Swift tests pass.
+**Changes:**
+1. **RunSession** (`operator_runtime::engine::RunSession`) — ad-hoc single-step gated execution: `open` → `execute_step(&Step)` → `finish`. Each step runs through the SAME policy gate (grants/escalation), `{{secret:*}}` resolution, store-boundary redaction, and audit as plan execution (shared, security-critical helpers). Holds a PERSISTENT helper connection so snapshot element-refs survive across calls, and one run per session (session-as-run). `execute_plan` is unchanged; both paths share the same helpers. The shared substrate for M9 + M10.
+2. **New crate `operator-mcp`** (workspace now 10 crates) — a minimal, spec-compliant, hand-rolled MCP server over stdio (newline-delimited JSON-RPC 2.0): `initialize`, `tools/list`, `tools/call`, `ping`. Deliberately NOT the rmcp SDK — rmcp's async/Send bounds don't fit the synchronous RunSession (rusqlite + child pipes); documented as a choice, with rmcp adoptable later without changing the tool surface.
+3. **`operator-jack mcp serve [--grants <file>]`** — serves MCP on stdio. Because stdio is the protocol channel (no interactive terminal), the session auto-approves confirmations and relies on the grant envelope + escalation classifier + secure-field refusal for safety. Prints the effective grant envelope ("this session may: …") to STDERR before serving (stdout is protocol-only); warns if unrestricted.
+4. **15 tools**: snapshot, screenshot, click, type_text, key_press, set_value, select_menu, read_text, wait_for, list_apps, focus_app, open_app, read_file, write_file, exec. click/read_text/set_value accept a selector OR an element_ref from a prior snapshot. Each tool call → a RunSession step; denials return `isError=true` (the session continues), not a JSON-RPC error.
+5. **Verified live** (scripted JSON-RPC over stdio): initialize → serverInfo; tools/list → 15 tools; write_file inside an fs_write grant succeeded; the same write outside the grant returned isError ("denied by policy: Grant required: 'fs_write'…") and no file was created.
+6. Created `SPEC_FREEZE_V0.9.md` (M9 MCP server spec — RunSession, `mcp serve`, tool surface).
+7. 143 Rust tests + 10 Swift tests.
 
 ### v0.9.1 — 2026-07-08
 **Status:** M8 COMPLETE. Finished the last deferred sub-feature: the Keychain secret store.
@@ -284,7 +297,7 @@
 - [x] SPEC_FREEZE_V0.1.md (archived)
 - [x] SPEC_FREEZE_V0.2.md (active spec)
 - [x] PROJECT_CONTEXT.md (this file)
-- [x] Rust workspace scaffolding (9 crates: cli, core, runtime, store, exec-system, exec-browser, ipc, planner, skills)
+- [x] Rust workspace scaffolding (10 crates: cli, core, runtime, store, exec-system, exec-browser, ipc, planner, skills, mcp)
 - [x] operator-core: types, validation, interpolation, redaction, events, policy
 - [x] operator-store: SQLite migrations, CRUD repos (12 unit tests passing)
 - [x] operator-ipc: protocol types, real IPC client with NDJSON framing
@@ -341,6 +354,13 @@
 - [x] docs/examples/grants-scoped-write.json (fs_write grant + budget)
 - [x] 139 Rust tests + 10 Swift tests passing (v0.9.0)
 - [x] Keychain secret store + `{{secret:name}}` injection (v0.9.1) — `secret set/list/rm`, resolved at execution time, never persisted (verified no-leak)
+- [x] SPEC_FREEZE_V0.9.md (M9 MCP server spec)
+- [x] M9 RunSession (`operator_runtime::engine::RunSession`) — ad-hoc single-step gated execution (open → execute_step → finish) through the same policy gate, `{{secret:*}}` resolution, redaction, and audit as plan execution; persistent helper (snapshot refs survive across calls); session-as-run. `execute_plan` unchanged (shared helpers). Shared substrate for M9 + M10
+- [x] M9 `operator-mcp` crate (workspace → 10 crates) — hand-rolled JSON-RPC-2.0-over-stdio MCP server (`initialize`/`tools/list`/`tools/call`/`ping`); deliberately NOT rmcp (its async/Send bounds don't fit the sync RunSession; documented, rmcp adoptable later without changing the tool surface)
+- [x] M9 `operator-jack mcp serve [--grants <file>]` — serves MCP on stdio; auto-approves confirmations (no interactive terminal) and relies on the grant envelope + escalation classifier + secure-field refusal; prints the effective grant envelope to STDERR before serving (stdout protocol-only), warns if unrestricted
+- [x] M9 15 MCP tools: snapshot, screenshot, click, type_text, key_press, set_value, select_menu, read_text, wait_for, list_apps, focus_app, open_app, read_file, write_file, exec (click/read_text/set_value accept selector OR element_ref; each call = one RunSession step; denials return isError, session continues)
+- [x] M9 verified live over stdio: write_file inside an fs_write grant succeeded; the same write outside the grant returned isError ("Grant required: 'fs_write'") with no file created
+- [x] 143 Rust tests + 10 Swift tests passing (v0.10.0)
 
 ### Milestone Status
 
@@ -358,7 +378,8 @@
 | Phase B | DONE | Stabilization (v0.7.1): audit/security fixes, Swift correctness + test target, docs reconciliation |
 | M7 | DONE | Perception / Observation API: ui.snapshot (compact AX + refs), ui.screenshot, Electron/Chromium AX enablement, path selectors, doctor Screen Recording check |
 | M8 | DONE | Safety envelope: task-scoped grants (fs/exec/domains), run budgets + `Partial` status, always-escalate classifier, secure-field refusal, redaction hardening, exit code 3, Keychain secret store (`{{secret:name}}` injection) |
-| M9-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md — M9 MCP server (next), M10 agent loop, M11 long-horizon, M12 browser wiring, M13 control flow, M14 AppleScript/OCR, M15 trust |
+| M9 | DONE | MCP server mode: RunSession (ad-hoc gated single-step exec), operator-mcp crate (JSON-RPC-over-stdio, 15 tools), `operator-jack mcp serve --grants`, session-as-run audit; verified live grant enforcement over MCP |
+| M10-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md — M10 agent loop (next), M11 long-horizon, M12 browser wiring, M13 control flow, M14 AppleScript/OCR, M15 trust |
 
 ---
 
@@ -366,10 +387,10 @@
 
 **Immediate next steps (in order) — see MASTER_PLAN.md for full detail:**
 
-1. **M9 — MCP Server Mode (v0.10.0)** — expose Operator Jack as an MCP server (`operator-jack mcp serve`) so any MCP client drives the gated executors; owns the RunSession refactor (extract single-step gated execution from `execute_plan`). First shippable autonomy. Depends on M7 + M8 (both done).
-2. **M10 — Native agent loop (v0.11.0)** — observe→propose→execute→re-observe, consuming M9's RunSession + a multi-turn/tool-calling provider layer.
+1. **M10 — Native agent loop (v0.11.0)** — observe→propose→execute→re-observe: a budgeted loop of ui.snapshot → model proposes ONE typed step → RunSession executes → result + fresh snapshot fed back → repeat. Consumes M9's RunSession + a multi-turn/tool-calling, vision-capable provider layer v2 (`operator-planner`) and adds an `operator-agent` crate. The M8 LLM-budget fields (`max_llm_calls`, `max_llm_cost`) are consumed here. Depends on M7 + M8 + M9 (all done).
+2. **M11 — Long-horizon autonomy (v0.12.0)** — pause/persist/resume, approvals, human takeover, kill-switch hardening, supervision DX (`logs --follow`, mid-run steering).
 
-**MASTER_PLAN.md is the authoritative roadmap for M7-M15.** M0-M8 plus Phase B (v0.7.1) are complete. M9 is next.
+**MASTER_PLAN.md is the authoritative roadmap for M7-M15.** M0-M9 plus Phase B (v0.7.1) are complete. M10 is next.
 
 ---
 
@@ -418,4 +439,4 @@ When multiple AX elements match and no `index` is given: interactive mode prompt
 
 ---
 
-*Last updated: 2026-07-08 — M8 COMPLETE (v0.9.1). The Safety Envelope: task-scoped grants (fs/exec/domains), run budgets + new `Partial` terminal status, always-escalate classifier (sudo / rm -rf / pipe-to-shell, bulk-delete > 25, send/purchase in messaging apps, hard secure-field typing refusal), redaction hardening (plan_json at rest, looks-like-path exemption), policy-denial exit code 3, and the Keychain secret store (`{{secret:name}}` injection resolved only at execution time, never persisted — verified no-leak). M0-M8 plus Phase B done. 142 Rust tests + 10 Swift tests passing. Next: M9 (MCP server mode) per MASTER_PLAN.md.*
+*Last updated: 2026-07-09 — M9 COMPLETE (v0.10.0). MCP server mode: the RunSession primitive (ad-hoc single-step gated execution — same policy gate, `{{secret:*}}` resolution, redaction, and audit as plan execution; persistent helper so element refs survive across calls; session-as-run) and a new `operator-mcp` crate (workspace now 10 crates) — a hand-rolled JSON-RPC-2.0-over-stdio MCP server (rmcp deferred; it doesn't fit the sync RunSession) exposing 15 gated tools via `operator-jack mcp serve [--grants <file>]`, with the effective grant envelope printed to STDERR before serving. Verified live: a write inside an fs_write grant succeeded over MCP; the same write outside it returned isError with no file created. M0-M9 plus Phase B done. 143 Rust tests + 10 Swift tests passing. Next: M10 (native agent loop) per MASTER_PLAN.md.*
