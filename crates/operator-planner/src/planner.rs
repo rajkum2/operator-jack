@@ -135,7 +135,7 @@ impl Planner {
     }
 
     /// Creates a provider instance from the configuration.
-    fn create_provider(
+    pub fn create_provider(
         &self,
         provider_type: ProviderType,
     ) -> Result<Box<dyn LlmProvider>, PlannerError> {

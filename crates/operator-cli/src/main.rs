@@ -176,6 +176,21 @@ enum Commands {
         #[command(subcommand)]
         action: McpAction,
     },
+
+    /// Autonomous agent (M10) — pursue a goal by observe→act→re-observe with an LLM
+    Agent {
+        /// The goal, e.g. "open Calculator and compute 2 + 3"
+        instruction: String,
+        /// Maximum observe→act iterations
+        #[arg(long, default_value = "15")]
+        max_iters: usize,
+        /// LLM provider (kimi | openai | anthropic | ollama)
+        #[arg(long)]
+        provider: Option<String>,
+        /// Path to a JSON grants file bounding the session
+        #[arg(long)]
+        grants: Option<std::path::PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -383,7 +398,116 @@ fn main() -> Result<()> {
         Commands::Mcp { ref action } => match action {
             McpAction::Serve { grants } => cmd_mcp_serve(&cli, grants.as_deref()),
         },
+        Commands::Agent {
+            ref instruction,
+            max_iters,
+            ref provider,
+            ref grants,
+        } => cmd_agent(
+            &cli,
+            instruction,
+            *max_iters,
+            provider.clone(),
+            grants.as_deref(),
+        ),
     }
+}
+
+// ---------------------------------------------------------------------------
+// cmd_agent — autonomous agent loop (M10)
+// ---------------------------------------------------------------------------
+
+/// Runs the native agent loop: an LLM proposes one action at a time, each
+/// executed through a gated `RunSession`, observing results until done or the
+/// iteration budget is hit. Like MCP mode, it auto-approves confirmations and
+/// relies on the grant envelope + escalation classifier for safety.
+fn cmd_agent(
+    cli: &Cli,
+    instruction: &str,
+    max_iters: usize,
+    provider_override: Option<String>,
+    grants_file: Option<&Path>,
+) -> Result<()> {
+    use operator_core::grants::Grants;
+    use operator_planner::{Planner, ProviderType};
+
+    if instruction.trim().is_empty() {
+        eprintln!(
+            "Error: provide a goal, e.g. operator-jack agent \"open Calculator and compute 2 + 3\""
+        );
+        std::process::exit(6);
+    }
+
+    let cfg = OperatorConfig::load().unwrap_or_default();
+    let planner = Planner::new(build_planner_config(&cfg));
+
+    // Resolve provider: explicit override, else first available, else Ollama.
+    let provider_type = match provider_override {
+        Some(p) => p
+            .parse::<ProviderType>()
+            .map_err(|e| anyhow::anyhow!("{e}"))?,
+        None => planner
+            .first_available_provider()
+            .unwrap_or(ProviderType::Ollama),
+    };
+    let provider = planner
+        .create_provider(provider_type)
+        .map_err(|e| anyhow::anyhow!("failed to initialize provider: {e}"))?;
+
+    // Autonomous, non-interactive posture (same as MCP): safety via grants +
+    // escalation classifier, not per-step confirmation.
+    let mut config = build_engine_config(cli)?;
+    config.yes_to_all = true;
+    config.interactive = false;
+
+    let session_grants: Option<Grants> = if let Some(path) = grants_file {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read grants file {}", path.display()))?;
+        Some(serde_json::from_str(&text).with_context(|| "failed to parse grants file")?)
+    } else {
+        config.grants.take()
+    };
+    config.grants = None;
+
+    eprintln!("operator-jack agent — goal: {instruction}");
+    eprintln!("Provider: {}", provider_type.display_name());
+    print_grant_preview(session_grants.as_ref());
+
+    let store = open_store()?;
+    let mut session =
+        operator_runtime::engine::RunSession::open(store, config, session_grants, None)
+            .map_err(|e| anyhow::anyhow!("failed to open agent session: {e}"))?;
+    let run_id = session.run_id().to_string();
+
+    let data_dir = resolve_data_dir();
+    let _ = write_pid_file(&data_dir, &run_id);
+
+    let outcome =
+        operator_agent::run_agent(instruction, provider.as_ref(), &mut session, max_iters);
+    let summary = session.finish();
+    let _ = remove_pid_file(&data_dir);
+
+    if cli.json {
+        let status = format!("{:?}", outcome.status);
+        let obj = serde_json::json!({
+            "run_id": run_id,
+            "status": status,
+            "iterations": outcome.iterations,
+            "summary": outcome.summary,
+            "steps": summary.steps_total,
+        });
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+    } else {
+        println!();
+        println!("Agent finished: {:?}", outcome.status);
+        println!("  Iterations: {}", outcome.iterations);
+        println!("  Summary:    {}", outcome.summary);
+        println!(
+            "  Run:        {run_id} ({} steps executed)",
+            summary.steps_total
+        );
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

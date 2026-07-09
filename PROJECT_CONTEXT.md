@@ -9,7 +9,7 @@
 ## Quick Start (For New Session)
 
 1. Read this file completely
-2. Read the roadmap: `MASTER_PLAN.md` (authoritative, M7-M15). Newest spec: `SPEC_FREEZE_V0.9.md` (M9 MCP server mode); prior: `SPEC_FREEZE_V0.8.md` (M8 safety envelope), `SPEC_FREEZE_V0.7.md` (M7 perception), `SPEC_FREEZE_V0.6.md` (M5 browser), `SPEC_FREEZE_V0.5.md` (M6 skills, retroactive); base contract: `SPEC_FREEZE_V0.2.md`
+2. Read the roadmap: `MASTER_PLAN.md` (authoritative, M7-M15). Newest spec: `SPEC_FREEZE_V0.10.md` (M10 native agent loop); prior: `SPEC_FREEZE_V0.9.md` (M9 MCP server mode), `SPEC_FREEZE_V0.8.md` (M8 safety envelope), `SPEC_FREEZE_V0.7.md` (M7 perception), `SPEC_FREEZE_V0.6.md` (M5 browser), `SPEC_FREEZE_V0.5.md` (M6 skills, retroactive); base contract: `SPEC_FREEZE_V0.2.md`
 3. Check `VERSION_LOG` below for what changed last
 4. Check `CURRENT_STATE` below for what's built vs pending
 5. Check `NEXT_ACTIONS` for what to do next
@@ -34,6 +34,7 @@
 |------|---------|
 | `PROJECT_CONTEXT.md` | THIS FILE — resume context, version log, state tracker |
 | `MASTER_PLAN.md` | Authoritative forward roadmap (M7-M15) |
+| `SPEC_FREEZE_V0.10.md` | M10 spec — native agent loop (provider `chat`, observe→propose→execute→re-observe, agent mode semantics) |
 | `SPEC_FREEZE_V0.9.md` | M9 spec — MCP server mode (RunSession, mcp serve, 15-tool surface over JSON-RPC-over-stdio) |
 | `SPEC_FREEZE_V0.8.md` | M8 spec — safety envelope (grants, budgets + Partial status, escalation classifier, redaction hardening) |
 | `SPEC_FREEZE_V0.7.md` | M7 spec — observation API (ui.snapshot/ui.screenshot, refs, Electron AX, path selectors) |
@@ -53,6 +54,7 @@
 | `crates/operator-planner/` | LLM planner (M4) — Kimi/OpenAI/Anthropic/Ollama |
 | `crates/operator-skills/` | Skills system (M6) — manifest parse/validate/expand |
 | `crates/operator-mcp/` | MCP server (M9) — JSON-RPC over stdio, tools → RunSession |
+| `crates/operator-agent/` | Native agent loop (M10) — observe→propose→execute→re-observe orchestrator on RunSession |
 | `macos-helper/` | Swift SPM package for AX automation |
 | `docs/` | Architecture, security, selectors, permissions, roadmap |
 | `docs/examples/` | Example plan JSON files |
@@ -81,6 +83,17 @@
 ---
 
 ## VERSION_LOG
+
+### v0.11.0 — 2026-07-09
+**Status:** M10 COMPLETE. Native agent loop — Operator Jack drives *itself*: observe → propose ONE JSON action → execute through a `RunSession` → re-observe, until the model signals `done`, `--max-iters` is hit, or the provider errors. The definitional autonomy feature. Workspace grows to 11 crates. 146 Rust tests + 10 Swift tests pass.
+**Changes:**
+1. **New crate `operator-agent`** (workspace now 11 crates) — the native autonomous loop: `operator_agent::run_agent(goal, provider, &mut RunSession, max_iters) -> AgentOutcome` (`AgentStatus` = `Done | MaxIterations | Aborted`). Each turn: observe the screen → the model proposes ONE JSON action → execute it through M9's `RunSession` (the SAME policy gate, grants, escalation classifier, `{{secret:*}}` resolution, redaction, and audit as plan execution) → re-observe. Agent actions: open_app, focus_app, snapshot, click, type_text, key_press, set_value, select_menu, read_text, wait_for, read_file, write_file, exec. `snapshot` returns a compact AX tree with element refs (e1, e2…) the model then acts on; refs survive across turns via the persistent helper. Malformed/unknown actions and `ELEMENT_AMBIGUOUS` are fed back to the model for self-correction.
+2. **Provider layer — `chat`**: `LlmProvider` gains `chat(system, user) -> Result<String, PlannerError>`; `generate_plan` is now `chat` + plan extraction. Implemented for all four providers (Kimi, OpenAI, Anthropic, Ollama). The agent loop uses `chat` to request one action per turn.
+3. **`operator-jack agent "<goal>" [--max-iters N] [--provider P] [--grants <file>]`** — runs the loop. Autonomous and non-interactive (auto-approves confirmations; safety comes from the grant envelope + escalation classifier + secure-field refusal). Prints the effective grant envelope first; the whole run is one session-run in the store and every executed action is audited.
+4. Version bumped to 0.11.0 (workspace + Swift `helperVersion`).
+5. **Verified live** with a local Ollama model (`llama3.2:3b`): open_app → snapshot → click → snapshot → click against Calculator — 6 audited steps under one run. Task-completion quality tracks the model (a stronger provider via API completes goals a small local model may not).
+6. Created `SPEC_FREEZE_V0.10.md` (M10 agent-loop spec).
+7. Full gate green: `cargo fmt` clean, `cargo clippy -D warnings` clean, 146 Rust tests, 10 Swift tests, `check-examples.sh` all valid.
 
 ### v0.10.0 — 2026-07-09
 **Status:** M9 COMPLETE. MCP server mode — Operator Jack's gated executors exposed as MCP tools so any MCP client (Claude Code/Desktop) can drive the audited hands ("brain rented, hands owned"). Workspace grows to 10 crates. 143 Rust tests + 10 Swift tests pass.
@@ -297,7 +310,7 @@
 - [x] SPEC_FREEZE_V0.1.md (archived)
 - [x] SPEC_FREEZE_V0.2.md (active spec)
 - [x] PROJECT_CONTEXT.md (this file)
-- [x] Rust workspace scaffolding (10 crates: cli, core, runtime, store, exec-system, exec-browser, ipc, planner, skills, mcp)
+- [x] Rust workspace scaffolding (11 crates: cli, core, runtime, store, exec-system, exec-browser, ipc, planner, skills, mcp, agent)
 - [x] operator-core: types, validation, interpolation, redaction, events, policy
 - [x] operator-store: SQLite migrations, CRUD repos (12 unit tests passing)
 - [x] operator-ipc: protocol types, real IPC client with NDJSON framing
@@ -361,6 +374,13 @@
 - [x] M9 15 MCP tools: snapshot, screenshot, click, type_text, key_press, set_value, select_menu, read_text, wait_for, list_apps, focus_app, open_app, read_file, write_file, exec (click/read_text/set_value accept selector OR element_ref; each call = one RunSession step; denials return isError, session continues)
 - [x] M9 verified live over stdio: write_file inside an fs_write grant succeeded; the same write outside the grant returned isError ("Grant required: 'fs_write'") with no file created
 - [x] 143 Rust tests + 10 Swift tests passing (v0.10.0)
+- [x] SPEC_FREEZE_V0.10.md (M10 agent-loop spec)
+- [x] M10 `operator-agent` crate (workspace → 11 crates) — native autonomous loop `run_agent(goal, provider, &mut RunSession, max_iters) -> AgentOutcome` (`AgentStatus` = Done | MaxIterations | Aborted): observe → model proposes ONE JSON action → execute via M9's RunSession (same policy gate / grants / escalation / `{{secret:*}}` / redaction / audit) → re-observe; repeats until `done`, `--max-iters`, or provider error
+- [x] M10 agent actions: open_app, focus_app, snapshot, click, type_text, key_press, set_value, select_menu, read_text, wait_for, read_file, write_file, exec; snapshot returns a compact AX tree + refs (e1, e2…) that survive across turns via the persistent helper; malformed/unknown actions and ELEMENT_AMBIGUOUS fed back for self-correction
+- [x] M10 provider `chat(system, user)` on `LlmProvider` (Kimi/OpenAI/Anthropic/Ollama); `generate_plan` is now `chat` + plan extraction
+- [x] M10 `operator-jack agent "<goal>" [--max-iters N] [--provider P] [--grants <file>]` — autonomous, non-interactive (auto-approves; relies on grant envelope + escalation classifier + secure-field refusal); prints the effective grant envelope first; one session-run, every action audited
+- [x] M10 verified live with local Ollama (`llama3.2:3b`): open_app → snapshot → click → snapshot → click on Calculator, 6 audited steps under one run
+- [x] 146 Rust tests + 10 Swift tests passing (v0.11.0)
 
 ### Milestone Status
 
@@ -379,7 +399,8 @@
 | M7 | DONE | Perception / Observation API: ui.snapshot (compact AX + refs), ui.screenshot, Electron/Chromium AX enablement, path selectors, doctor Screen Recording check |
 | M8 | DONE | Safety envelope: task-scoped grants (fs/exec/domains), run budgets + `Partial` status, always-escalate classifier, secure-field refusal, redaction hardening, exit code 3, Keychain secret store (`{{secret:name}}` injection) |
 | M9 | DONE | MCP server mode: RunSession (ad-hoc gated single-step exec), operator-mcp crate (JSON-RPC-over-stdio, 15 tools), `operator-jack mcp serve --grants`, session-as-run audit; verified live grant enforcement over MCP |
-| M10-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md — M10 agent loop (next), M11 long-horizon, M12 browser wiring, M13 control flow, M14 AppleScript/OCR, M15 trust |
+| M10 | DONE | Native agent loop: operator-agent crate (observe→propose one JSON action→execute via RunSession→re-observe), provider `chat()`, `operator-jack agent` CLI; verified live on Calculator via local Ollama |
+| M11-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md — M11 long-horizon/supervision (next), M12 web autonomy, M13 hands+control flow, M14 native macOS lane, M15 trust/residency |
 
 ---
 
@@ -387,10 +408,10 @@
 
 **Immediate next steps (in order) — see MASTER_PLAN.md for full detail:**
 
-1. **M10 — Native agent loop (v0.11.0)** — observe→propose→execute→re-observe: a budgeted loop of ui.snapshot → model proposes ONE typed step → RunSession executes → result + fresh snapshot fed back → repeat. Consumes M9's RunSession + a multi-turn/tool-calling, vision-capable provider layer v2 (`operator-planner`) and adds an `operator-agent` crate. The M8 LLM-budget fields (`max_llm_calls`, `max_llm_cost`) are consumed here. Depends on M7 + M8 + M9 (all done).
-2. **M11 — Long-horizon autonomy (v0.12.0)** — pause/persist/resume, approvals, human takeover, kill-switch hardening, supervision DX (`logs --follow`, mid-run steering).
+1. **M11 — Long-horizon autonomy & supervision (v0.12.0)** — pause/persist/resume, approvals, human takeover, kill-switch hardening, supervision DX (`logs --follow`, mid-run steering). Depends on M8 + M10 (both done).
+2. **M12 — Web autonomy (v0.13.0)** — browser profile isolation → plan/agent-lane wiring → real extraction; unlocks the "scrape a website, install what you need" scenario.
 
-**MASTER_PLAN.md is the authoritative roadmap for M7-M15.** M0-M9 plus Phase B (v0.7.1) are complete. M10 is next.
+**MASTER_PLAN.md is the authoritative roadmap for M7-M15.** M0-M10 plus Phase B (v0.7.1) are complete. M11 is next.
 
 ---
 
@@ -439,4 +460,4 @@ When multiple AX elements match and no `index` is given: interactive mode prompt
 
 ---
 
-*Last updated: 2026-07-09 — M9 COMPLETE (v0.10.0). MCP server mode: the RunSession primitive (ad-hoc single-step gated execution — same policy gate, `{{secret:*}}` resolution, redaction, and audit as plan execution; persistent helper so element refs survive across calls; session-as-run) and a new `operator-mcp` crate (workspace now 10 crates) — a hand-rolled JSON-RPC-2.0-over-stdio MCP server (rmcp deferred; it doesn't fit the sync RunSession) exposing 15 gated tools via `operator-jack mcp serve [--grants <file>]`, with the effective grant envelope printed to STDERR before serving. Verified live: a write inside an fs_write grant succeeded over MCP; the same write outside it returned isError with no file created. M0-M9 plus Phase B done. 143 Rust tests + 10 Swift tests passing. Next: M10 (native agent loop) per MASTER_PLAN.md.*
+*Last updated: 2026-07-09 — M10 COMPLETE (v0.11.0). Native agent loop: a new `operator-agent` crate (workspace now 11 crates) implementing Operator Jack's own closed loop — `run_agent(goal, provider, &mut RunSession, max_iters)` observes the screen, asks the model for ONE JSON action, executes it through M9's RunSession (same policy gate / grants / escalation / `{{secret:*}}` / redaction / audit as plan execution), then re-observes; repeats until the model emits `done`, `--max-iters` is hit, or the provider errors. The `LlmProvider` trait gains `chat(system, user)` (implemented for Kimi/OpenAI/Anthropic/Ollama; `generate_plan` is now `chat` + extraction), and a new `operator-jack agent "<goal>"` CLI runs the loop autonomously (auto-approves; relies on the grant envelope + escalation classifier + secure-field refusal). Verified live on Calculator via a local Ollama model (6 audited steps under one run). M0-M10 plus Phase B done. 146 Rust tests + 10 Swift tests passing. Next: M11 (long-horizon autonomy & supervision) per MASTER_PLAN.md.*

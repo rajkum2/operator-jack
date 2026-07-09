@@ -2,7 +2,6 @@
 
 use operator_core::types::Plan;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, trace};
 
 use crate::error::PlannerError;
 use crate::prompt::{system_prompt, user_prompt};
@@ -58,6 +57,11 @@ impl LlmProvider for KimiProvider {
     }
 
     fn generate_plan(&self, instruction: &str) -> Result<Plan, PlannerError> {
+        let content = self.chat(&system_prompt(), &user_prompt(instruction))?;
+        self.extract_plan_from_response(&content)
+    }
+
+    fn chat(&self, system: &str, user: &str) -> Result<String, PlannerError> {
         let api_key = self
             .config
             .api_key
@@ -72,22 +76,18 @@ impl LlmProvider for KimiProvider {
             messages: vec![
                 Message {
                     role: "system".to_string(),
-                    content: system_prompt(),
+                    content: system.to_string(),
                 },
                 Message {
                     role: "user".to_string(),
-                    content: user_prompt(instruction),
+                    content: user.to_string(),
                 },
             ],
             temperature: self.config.temperature.unwrap_or(0.2),
             max_tokens: self.config.max_tokens.unwrap_or(4096),
         };
 
-        trace!("Sending request to Kimi API");
-        debug!("Request model: {}", request.model);
-
         let timeout = std::time::Duration::from_secs(self.config.timeout_seconds.unwrap_or(60));
-
         let response = ureq::post(&format!("{}/chat/completions", self.base_url()))
             .set("Authorization", &format!("Bearer {}", api_key))
             .set("Content-Type", "application/json")
@@ -113,11 +113,7 @@ impl LlmProvider for KimiProvider {
         if kimi_response.choices.is_empty() {
             return Err(PlannerError::EmptyPlan);
         }
-
-        let content = &kimi_response.choices[0].message.content;
-        trace!("Kimi response: {}", content);
-
-        self.extract_plan_from_response(content)
+        Ok(kimi_response.choices[0].message.content.clone())
     }
 }
 

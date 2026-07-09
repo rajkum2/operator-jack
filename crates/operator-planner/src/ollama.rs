@@ -2,7 +2,6 @@
 
 use operator_core::types::Plan;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, trace};
 
 use crate::error::PlannerError;
 use crate::prompt::{system_prompt, user_prompt};
@@ -95,16 +94,21 @@ impl LlmProvider for OllamaProvider {
     }
 
     fn generate_plan(&self, instruction: &str) -> Result<Plan, PlannerError> {
+        let content = self.chat(&system_prompt(), &user_prompt(instruction))?;
+        self.extract_plan_from_response(&content)
+    }
+
+    fn chat(&self, system: &str, user: &str) -> Result<String, PlannerError> {
         let request = OllamaRequest {
             model: self.model().to_string(),
             messages: vec![
                 Message {
                     role: "system".to_string(),
-                    content: system_prompt(),
+                    content: system.to_string(),
                 },
                 Message {
                     role: "user".to_string(),
-                    content: user_prompt(instruction),
+                    content: user.to_string(),
                 },
             ],
             stream: false,
@@ -114,12 +118,7 @@ impl LlmProvider for OllamaProvider {
             },
         };
 
-        trace!("Sending request to Ollama API");
-        debug!("Request model: {}", request.model);
-        debug!("Base URL: {}", self.base_url());
-
         let timeout = std::time::Duration::from_secs(self.config.timeout_seconds.unwrap_or(120));
-
         let response = ureq::post(&format!("{}/api/chat", self.base_url()))
             .set("Content-Type", "application/json")
             .timeout(timeout)
@@ -150,11 +149,7 @@ impl LlmProvider for OllamaProvider {
         let ollama_response: OllamaResponse = response
             .into_json()
             .map_err(|e| PlannerError::InvalidResponse(e.to_string()))?;
-
-        let content = &ollama_response.message.content;
-        trace!("Ollama response: {}", content);
-
-        self.extract_plan_from_response(content)
+        Ok(ollama_response.message.content)
     }
 }
 

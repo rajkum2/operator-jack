@@ -21,7 +21,7 @@ export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 # Build Rust workspace
 cd /Users/kirankumaralugonda/operator-jack && cargo build
 
-# Run Rust tests (143 tests)
+# Run Rust tests (146 tests)
 cargo test
 
 # Build Swift helper and run Swift tests (10 tests)
@@ -46,7 +46,8 @@ operator-jack/
 │   ├── operator-ipc/        # NDJSON IPC client for Swift helper
 │   ├── operator-planner/    # LLM planner (M4) - Kimi/OpenAI/Anthropic/Ollama providers
 │   ├── operator-skills/     # Skill manifests (M6) - parse/validate/expand to plans
-│   └── operator-mcp/        # MCP server (M9) - JSON-RPC over stdio, tools → RunSession
+│   ├── operator-mcp/        # MCP server (M9) - JSON-RPC over stdio, tools → RunSession
+│   └── operator-agent/      # Native agent loop (M10) - observe→propose→execute→re-observe on RunSession
 ├── macos-helper/            # Swift SPM package
 │   ├── Sources/OperatorMacOSHelper/
 │   │   ├── main.swift       # NDJSON server loop, handler registration
@@ -110,7 +111,7 @@ operator-jack/
 - `path` is a real matcher: suffix match on the computed traversal path (implemented in M7; was rejected-when-alone in Phase B)
 
 ### Testing
-- Rust: `cargo test` — unit tests in each crate's source files (143 tests)
+- Rust: `cargo test` — unit tests in each crate's source files (146 tests)
 - Swift: `cd macos-helper && swift test` — XCTest target at `Tests/OperatorMacOSHelperTests/` (10 tests; selector parsing + criteria). AX-dependent behavior is covered by the live acceptance harness.
 - Acceptance: `make check-examples` validates every golden plan in `docs/examples/` and dry-run-expands every skill. **No example or skill ships without passing it.** Run a plan live via `operator-jack run --plan-file <path> --mode unsafe --yes`.
 
@@ -143,7 +144,8 @@ operator-jack/
 | M7 | DONE | Perception: ui.snapshot (compact AX + refs), ui.screenshot, Electron AX enablement, path selectors, doctor screen-recording check |
 | M8 | DONE | Safety envelope: task-scoped grants (fs/exec/domains), run budgets + Partial status, always-escalate classifier, secure-field refusal, redaction hardening, exit code 3, Keychain secret store (`{{secret:name}}` injection, `secret` CLI) |
 | M9 | DONE | MCP server mode: RunSession (ad-hoc gated single-step exec), operator-mcp crate (JSON-RPC-over-stdio, 15 tools), `operator-jack mcp serve --grants`, session-as-run audit |
-| M10-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md (M10=agent loop [next], M11=long-horizon, M12=browser wiring, M13=control flow, M14=AppleScript/OCR, M15=trust) |
+| M10 | DONE | Native agent loop: operator-agent crate (observe→propose one JSON action→execute via RunSession→re-observe), provider `chat()`, `operator-jack agent` CLI |
+| M11-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md (M11=long-horizon/supervision, M12=web autonomy, M13=hands+control flow, M14=native macOS lane, M15=trust/residency) |
 
 ## Important Rules
 
@@ -237,6 +239,20 @@ exec) over newline-delimited JSON-RPC 2.0. Each tool call runs as one `RunSessio
 same policy gate, escalation classifier, `{{secret:*}}` resolution, redaction, and audit
 as plan execution. The effective grant envelope is printed to STDERR before serving
 (stdout is protocol-only); denied calls return `isError` and the session continues.
+
+### Agent (M10)
+```
+operator-jack agent "<goal>" [--max-iters N] [--provider P] [--grants <file>]
+```
+Runs the native autonomous agent loop: observe (`ui.snapshot`) → the model proposes ONE
+JSON action → execute it through a `RunSession` (same policy gate, grants, escalation
+classifier, `{{secret:*}}` resolution, redaction, and audit as plan execution) → re-observe.
+Repeats until the model emits `done`, `--max-iters` is hit, or the provider errors.
+Action vocabulary: open_app, focus_app, snapshot, click, type_text, key_press, set_value,
+select_menu, read_text, wait_for, read_file, write_file, exec. Autonomous and non-interactive
+(auto-approves confirmations; safety comes from the grant envelope + escalation classifier +
+secure-field refusal). Prints the effective grant envelope first; the whole run is one
+session-run in the store and every executed action is audited.
 
 ## Common Flags
 

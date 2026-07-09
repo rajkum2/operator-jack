@@ -6,7 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-See [`MASTER_PLAN.md`](MASTER_PLAN.md) for the authoritative roadmap. Next: M10 (native agent loop).
+See [`MASTER_PLAN.md`](MASTER_PLAN.md) for the authoritative roadmap. Next: M11 (long-horizon autonomy & supervision).
+
+## [0.11.0] - 2026-07-09
+
+M10 — Native agent loop. Operator Jack drives *itself*: observe the screen → propose ONE JSON action → execute it → re-observe, repeating until the goal is done or a limit is hit. The definitional autonomy feature — no hand-written plan.
+
+### Added
+- `operator-agent` crate — the native autonomous loop (`operator_agent::run_agent(goal, provider, &mut RunSession, max_iters) -> AgentOutcome`, with `AgentStatus` = `Done | MaxIterations | Aborted`): each turn observes the screen, asks the model to propose ONE JSON action, executes it through a `RunSession` (the same policy gate, grants, escalation classifier, `{{secret:*}}` resolution, redaction, and audit as plan execution), then re-observes — repeating until the model emits `done`, `--max-iters` is reached, or the provider errors. Agent actions: `open_app`, `focus_app`, `snapshot`, `click`, `type_text`, `key_press`, `set_value`, `select_menu`, `read_text`, `wait_for`, `read_file`, `write_file`, `exec`. `snapshot` returns a compact AX tree with element refs (`e1`, `e2`…) that the model then acts on; refs survive across turns via the persistent helper. Malformed or unknown actions and `ELEMENT_AMBIGUOUS` are fed back to the model for self-correction.
+- `operator-jack agent "<goal>" [--max-iters N] [--provider P] [--grants <file>]` — runs the agent loop. It is autonomous and non-interactive (auto-approves confirmations; safety comes from the grant envelope + escalation classifier + secure-field refusal). It prints the effective grant envelope first; the whole run is one session-run in the store, and every executed action is audited.
+- `LlmProvider::chat(system, user) -> Result<String, PlannerError>` on the provider trait, implemented for all four providers (Kimi, OpenAI, Anthropic, Ollama); `generate_plan` is now `chat` plus plan extraction.
+- SPEC_FREEZE_V0.10.md (M10 native agent-loop spec).
+
+### Note
+- Verified live against a local Ollama model (`llama3.2:3b`): open_app → snapshot → click → snapshot → click on Calculator, 6 audited steps under a single run. Task-completion quality tracks the model — a stronger provider via API completes goals a small local model may not. Full gate green: `cargo fmt`, `cargo clippy -D warnings`, 146 Rust tests, 10 Swift tests, and `check-examples.sh` all pass.
 
 ## [0.10.0] - 2026-07-09
 

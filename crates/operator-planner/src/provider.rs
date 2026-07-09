@@ -44,6 +44,11 @@ pub trait LlmProvider: Send + Sync {
 
     /// Generates a plan from a natural language instruction.
     fn generate_plan(&self, instruction: &str) -> Result<Plan, PlannerError>;
+
+    /// Single-turn chat completion: sends a system + user prompt and returns the
+    /// model's raw text response. Used by the agent loop (M10), which asks for
+    /// one next action per turn rather than a whole plan.
+    fn chat(&self, system: &str, user: &str) -> Result<String, PlannerError>;
 }
 
 /// Supported LLM providers.
