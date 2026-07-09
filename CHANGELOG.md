@@ -6,7 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-See [`MASTER_PLAN.md`](MASTER_PLAN.md) for the authoritative roadmap. Next: M12 (web autonomy).
+See [`MASTER_PLAN.md`](MASTER_PLAN.md) for the authoritative roadmap. Next: M13 (hands completion & deterministic control flow).
+
+## [0.13.0] - 2026-07-09
+
+M12 — Web autonomy (browser lane wiring). The M5 CDP executor — previously reachable only via the `browser` CLI subcommands, with `browser.*` plan steps hard-rejected — is now a first-class lane wired into plans, the agent loop, and MCP, running against an isolated per-run Chrome. Unlocks the "scrape a website, install what you need" scenario.
+
+### Added
+- **Browser lane wired into plans, the agent loop, and MCP** — the `browser.*` hard-reject in `validation.rs` is removed and a `"browser"` arm was added to the engine's lane dispatch; browser steps now route through policy, redaction, and audit like every other lane.
+- **Profile isolation** (security-critical, landed first) — the lane launches its OWN Chrome with a dedicated `--user-data-dir` (ephemeral per-run by default, removed on close; or a named persistent profile), never the user's real logged-in profile. It refuses to attach to a Chrome it didn't launch unless the escalating `browser.real_profile` capability is granted. Headless by default (headed available for human takeover).
+- **Sync↔async bridge** — a new `operator-runtime::browser_lane` module. `BrowserLane` runs a dedicated OS thread with its own multi-threaded tokio runtime; the sync engine talks to it over std channels only, so it is safe from the sync CLI and from within any other runtime (no nested-runtime panic). `BrowserHandle` lazily spawns Chrome on the first browser step and tears it down at run end. `operator-runtime` gains an `operator-exec-browser` dependency.
+- **New step types**: `browser.get_text_all` (querySelectorAll → array), `browser.get_attributes_all` (attribute from all matches → array; href/src resolved to absolute), `browser.snapshot` (compact interactive-element list with CSS-selector refs — the browser analogue of `ui.snapshot`), and `browser.download` (`Page.setDownloadBehavior` + wait-for-complete → file path).
+- **Robustness**: selectors on get_text/get_attribute/click/type auto-wait up to 5s for the element (Playwright-style); navigation waits poll `document.readyState` complete instead of a fixed sleep; screenshots write a PNG file and return its path (never base64 into the store).
+- **Agent + MCP browser catalogs** — MCP gains 8 browser tools (`browser_navigate`, `browser_snapshot`, `browser_get_text`, `browser_get_text_all`, `browser_get_attributes_all`, `browser_click`, `browser_type`, `browser_download`; 23 tools total); the agent loop gains those plus `browser_screenshot` and `browser_wait_for` (10 browser actions).
+- `docs/examples/browser-navigate.json` and a new `docs/examples/browser-scrape.json` now validate (moved out of the removed `pending-m12/` holding dir).
+- SPEC_FREEZE_V0.12.md (M12 web-autonomy spec).
+
+### Note
+- Verified live: a plan navigate → get_text → get_text_all → get_attributes_all → snapshot scraped a page (`get_text_all` → `["Alpha","Beta","Gamma"]`, `get_attributes_all(href)` → `["/a","/b","/c"]`). Tests use self-contained `data:` URLs because this machine's antivirus intercepts live http navigations. Full gate green: `cargo fmt`, `cargo clippy -D warnings`, 155 Rust tests, 10 Swift tests, and `check-examples.sh` all pass.
+- Known-partial: downloads are implemented but not exercised against a live download server here; `browser.snapshot` is a flat interactive-element list, not a full a11y tree; the browser CLI subcommands' `--dry-run`/`--json` polish is deferred.
 
 ## [0.12.0] - 2026-07-09
 

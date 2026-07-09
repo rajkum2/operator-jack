@@ -184,6 +184,9 @@ impl Engine {
         // Intersect plan-level and CLI-level allow-lists.
         let allow_apps = intersect_lists(&self.config.allow_apps, &plan.allow_apps);
         let allow_domains = intersect_lists(&self.config.allow_domains, &plan.allow_domains);
+        // Domains for the browser lane's own URL allow-list (belt & suspenders
+        // with the policy gate); cloned before allow_domains is moved below.
+        let browser_domains = allow_domains.clone();
 
         // Grant layers: config + plan. Each present layer must allow a step
         // (most restrictive wins). Absent grants impose no restriction.
@@ -212,6 +215,13 @@ impl Engine {
         // -- 6. Optionally create HelperClient (lazy connect on first UI step) --
         let mut helper: Option<HelperClient> =
             Some(HelperClient::new(self.config.helper_path.clone()));
+
+        // Browser lane (M12): lazily spawns an isolated Chrome on first
+        // browser.* step. Default profile isolation (never the user's Chrome).
+        let mut browser = crate::browser_lane::BrowserHandle::new(
+            browser_domains,
+            crate::browser_lane::lane_options(true, false, None),
+        );
 
         // -- 7. Update run to Running, log run_started --------------------------
         self.store
@@ -647,6 +657,7 @@ impl Engine {
                     &step.step_type,
                     &dispatch_params,
                     &mut helper,
+                    &mut browser,
                     timeout_ms,
                 );
 
@@ -657,6 +668,7 @@ impl Engine {
                     &step.step_type,
                     &dispatch_params,
                     &mut helper,
+                    &mut browser,
                     timeout_ms,
                 );
 
@@ -803,6 +815,7 @@ impl Engine {
                             &step.step_type,
                             &interpolated_params,
                             &mut helper,
+                            &mut browser,
                             timeout_ms,
                         );
 
@@ -813,6 +826,7 @@ impl Engine {
                             &step.step_type,
                             &interpolated_params,
                             &mut helper,
+                            &mut browser,
                             timeout_ms,
                         );
 
@@ -953,6 +967,8 @@ impl Engine {
         if let Some(ref mut h) = helper {
             h.disconnect();
         }
+        // Tear down the browser lane (kills Chrome + removes ephemeral profile).
+        browser.shutdown();
 
         tracing::info!(
             run_id = %run_id,
@@ -1049,6 +1065,7 @@ pub struct RunSession {
     plan_id: String,
     policy: PolicyGate,
     helper: Option<HelperClient>,
+    browser: crate::browser_lane::BrowserHandle,
     logger: RunLogger,
     step_index: u32,
     steps_succeeded: usize,
@@ -1118,6 +1135,10 @@ impl RunSession {
 
         Ok(RunSession {
             helper: Some(HelperClient::new(config.helper_path.clone())),
+            browser: crate::browser_lane::BrowserHandle::new(
+                config.allow_domains.clone(),
+                crate::browser_lane::lane_options(true, false, None),
+            ),
             store,
             config,
             run_id,
@@ -1155,6 +1176,7 @@ impl RunSession {
         if let Some(mut h) = self.helper.take() {
             h.disconnect();
         }
+        self.browser.shutdown();
     }
 
     /// Executes one step through the full gate + secret + audit + dispatch path.
@@ -1242,7 +1264,13 @@ impl RunSession {
         let _ = self.store.insert_step_result(&sr);
 
         let timeout = self.config.default_timeout_ms;
-        let result = execute_with_timeout(&step.step_type, &dispatch, &mut self.helper, timeout);
+        let result = execute_with_timeout(
+            &step.step_type,
+            &dispatch,
+            &mut self.helper,
+            &mut self.browser,
+            timeout,
+        );
         // Non-interactive: ELEMENT_AMBIGUOUS surfaces to the caller as an error
         // (the model refines its selector), so no interactive disambiguation.
         match result {
@@ -1330,6 +1358,7 @@ impl RunSession {
         if let Some(mut h) = self.helper.take() {
             h.disconnect();
         }
+        self.browser.shutdown();
         RunSummary {
             run_id: self.run_id.clone(),
             plan_id: self.plan_id.clone(),
@@ -1355,6 +1384,7 @@ fn execute_with_timeout(
     step_type: &StepType,
     params: &serde_json::Value,
     helper: &mut Option<HelperClient>,
+    browser: &mut crate::browser_lane::BrowserHandle,
     timeout_ms: u64,
 ) -> Result<serde_json::Value, RuntimeError> {
     let lane = step_type.lane();
@@ -1407,6 +1437,20 @@ fn execute_with_timeout(
             let result = h.send_with_timeout(step_type.as_str(), params.clone(), read_timeout)?;
             Ok(result)
         }
+        "browser" => {
+            // Browser steps run on the per-run browser lane (own thread +
+            // tokio runtime); Chrome launches lazily in an isolated profile.
+            let step = Step {
+                id: ulid::Ulid::new().to_string(),
+                step_type: step_type.clone(),
+                params: params.clone(),
+                timeout_ms: None,
+                retries: None,
+                retry_backoff_ms: None,
+                on_fail: None,
+            };
+            browser.execute(&step)
+        }
         other => Err(RuntimeError::Other(format!(
             "Unknown lane '{}' for step type {}",
             other, step_type
@@ -1429,6 +1473,7 @@ fn maybe_disambiguate(
     step_type: &StepType,
     params: &serde_json::Value,
     helper: &mut Option<HelperClient>,
+    browser: &mut crate::browser_lane::BrowserHandle,
     timeout_ms: u64,
 ) -> Result<serde_json::Value, RuntimeError> {
     let err = match result {
@@ -1521,7 +1566,7 @@ fn maybe_disambiguate(
 
     eprintln!("Re-sending with index {}...", chosen);
 
-    execute_with_timeout(step_type, &new_params, helper, timeout_ms)
+    execute_with_timeout(step_type, &new_params, helper, browser, timeout_ms)
 }
 
 /// Determines whether an error is retryable. Validation errors,

@@ -28,7 +28,7 @@ pub mod executor;
 // Re-exports
 pub use client::{discover_chrome_ws_url, launch_chrome, BrowserClient};
 pub use error::BrowserError;
-pub use executor::BrowserExecutor;
+pub use executor::{BrowserExecutor, BrowserLaunchOptions};
 
 use operator_core::types::Plan;
 use serde_json::Value;

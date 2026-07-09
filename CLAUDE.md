@@ -21,7 +21,7 @@ export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 # Build Rust workspace
 cd /Users/kirankumaralugonda/operator-jack && cargo build
 
-# Run Rust tests (152 tests)
+# Run Rust tests (155 tests)
 cargo test
 
 # Build Swift helper and run Swift tests (10 tests)
@@ -39,10 +39,10 @@ operator-jack/
 ├── crates/
 │   ├── operator-cli/        # CLI binary (clap), command dispatch
 │   ├── operator-core/       # Types, validation, interpolation, redaction, policy, selectors
-│   ├── operator-runtime/    # Execution engine, policy gates, retry/timeout, disambiguation
+│   ├── operator-runtime/    # Execution engine, policy gates, retry/timeout, disambiguation, browser lane bridge (M12: browser_lane)
 │   ├── operator-store/      # SQLite persistence (rusqlite + rusqlite_migration)
 │   ├── operator-exec-system/# sys.* step handlers (file ops, exec, clipboard)
-│   ├── operator-exec-browser/# browser.* CDP executor (M5) - tokio-tungstenite + reqwest
+│   ├── operator-exec-browser/# browser.* CDP executor - tokio-tungstenite + reqwest (M5; wired into plans/agent/MCP in M12 via operator-runtime browser_lane)
 │   ├── operator-ipc/        # NDJSON IPC client for Swift helper
 │   ├── operator-planner/    # LLM planner (M4) - Kimi/OpenAI/Anthropic/Ollama providers
 │   ├── operator-skills/     # Skill manifests (M6) - parse/validate/expand to plans
@@ -81,7 +81,7 @@ operator-jack/
 ### Execution Lanes
 - **System lane** (`sys.*`): Rust-native, runs on worker thread with timeout
 - **UI lane** (`ui.*`): Dispatched to Swift helper via NDJSON IPC
-- **Browser lane** (`browser.*`): Implemented (M5) via CDP, but reachable ONLY through the `browser` CLI subcommands (doctor/launch/navigate/screenshot). Browser steps in plans are NOT yet wired into the engine — a plan containing `browser.*` steps fails validation today (expected). Plan-lane wiring is milestone M12 in MASTER_PLAN.md.
+- **Browser lane** (`browser.*`): CDP executor (M5) now wired into plans, the agent loop, and MCP as of M12. The lane launches its OWN isolated Chrome via a per-run `BrowserHandle` (lazily spawned on the first browser step, torn down at run end) with a dedicated `--user-data-dir` — ephemeral per-run by default (removed on close) or a named persistent profile — never the user's real logged-in profile; it refuses to attach to a Chrome it didn't launch unless the escalating `browser.real_profile` capability is granted. Headless by default (headed available for human takeover). The sync engine talks to the async CDP client over std channels via `operator-runtime::browser_lane` (a dedicated OS thread running its own multi-threaded tokio runtime), so it is safe from the sync CLI and from within any other runtime (no nested-runtime panic).
 - **Control lane** (`ui.human_takeover`): Rust-native pause request (M11), not dispatched to any helper. An interactive run blocks for Enter; a non-interactive run pauses (checkpoint + approval) for out-of-band resume; the agent loop can emit it. Risk Low.
 
 ### Error Handling
@@ -112,7 +112,7 @@ operator-jack/
 - `path` is a real matcher: suffix match on the computed traversal path (implemented in M7; was rejected-when-alone in Phase B)
 
 ### Testing
-- Rust: `cargo test` — unit tests in each crate's source files (152 tests)
+- Rust: `cargo test` — unit tests in each crate's source files (155 tests)
 - Swift: `cd macos-helper && swift test` — XCTest target at `Tests/OperatorMacOSHelperTests/` (10 tests; selector parsing + criteria). AX-dependent behavior is covered by the live acceptance harness.
 - Acceptance: `make check-examples` validates every golden plan in `docs/examples/` and dry-run-expands every skill. **No example or skill ships without passing it.** Run a plan live via `operator-jack run --plan-file <path> --mode unsafe --yes`.
 
@@ -139,7 +139,7 @@ operator-jack/
 | M3a | DONE | 9 UI handlers (focus, find, wait, click, type, read, keyPress), disambiguation, 85 tests |
 | M3b | DONE | selectMenu, setValue, inspect, anyOf, element_ref, evidence hooks, 91 tests |
 | M4 | DONE | LLM planner (natural language → typed steps; Kimi/OpenAI/Anthropic/Ollama) |
-| M5 | DONE | Browser executor (CDP) — via `browser` CLI subcommands only; plan-lane wiring is M12 |
+| M5 | DONE | Browser executor (CDP) — `browser` CLI subcommands; plan/agent/MCP-lane wiring landed in M12 |
 | M6 | DONE | Skills system (manifest → plan expansion; skill list/validate/run) |
 | Phase B | DONE | Stabilization (v0.7.1): audit fixes, Swift correctness, security fixes, docs |
 | M7 | DONE | Perception: ui.snapshot (compact AX + refs), ui.screenshot, Electron AX enablement, path selectors, doctor screen-recording check |
@@ -147,7 +147,8 @@ operator-jack/
 | M9 | DONE | MCP server mode: RunSession (ad-hoc gated single-step exec), operator-mcp crate (JSON-RPC-over-stdio, 15 tools), `operator-jack mcp serve --grants`, session-as-run audit |
 | M10 | DONE | Native agent loop: operator-agent crate (observe→propose one JSON action→execute via RunSession→re-observe), provider `chat()`, `operator-jack agent` CLI |
 | M11 | DONE | Long-horizon & supervision (pause/resume, approvals, human_takeover, steer, logs --follow/prune) |
-| M12-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md (M12=web autonomy, M13=hands+control flow, M14=native macOS lane, M15=trust/residency) |
+| M12 | DONE | Web autonomy: browser lane wired into plans/agent/MCP, profile isolation, extraction verbs |
+| M13-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md (M13=hands+control flow, M14=native macOS lane, M15=trust/residency) |
 
 ## Important Rules
 
@@ -217,13 +218,23 @@ operator-jack skill validate <skill-file>         # Validate a skill manifest
 operator-jack skill run <name> --param key=value  # Expand skill to a plan and run it
 ```
 
-### Browser (M5 — CLI-only, not yet wired into plans)
+### Browser (M5 CLI subcommands + M12 plan/agent/MCP lane)
 ```
 operator-jack browser doctor                      # Check Chrome availability
 operator-jack browser launch [--port 9222]        # Launch Chrome with remote debugging
 operator-jack browser navigate <url> [--port N]   # Navigate to a URL via CDP
 operator-jack browser screenshot --output <path> [--full-page] [--port N]
 ```
+As of M12, `browser.*` steps also run inside plans, the agent loop, and MCP (through an isolated
+per-run Chrome — see Execution Lanes), routed through policy/redaction/audit like every other lane.
+Step types: the M5 verbs `browser.navigate`, `browser.click`, `browser.type`, `browser.get_text`,
+`browser.get_attribute`, `browser.wait_for`, `browser.screenshot`, `browser.scroll`, `browser.execute_js`,
+plus the M12 additions `browser.get_text_all` (querySelectorAll → array), `browser.get_attributes_all`
+(attribute from all matches → array; href/src resolved to absolute), `browser.snapshot` (compact
+interactive-element list with CSS-selector refs — the browser analogue of `ui.snapshot`), and
+`browser.download` (`Page.setDownloadBehavior` + wait-for-complete → file path). Selectors on
+get_text/get_attribute/click/type auto-wait up to 5s; navigation waits on `document.readyState`.
+Examples: `docs/examples/browser-navigate.json`, `docs/examples/browser-scrape.json`.
 
 ### Secrets (M8)
 ```
@@ -238,9 +249,11 @@ resolves it at execution time and never persists the literal value.
 ```
 operator-jack mcp serve [--grants <file>]   # Serve MCP over stdio (connect an MCP client)
 ```
-Exposes 15 gated tools (snapshot, screenshot, click, type_text, key_press, set_value,
+Exposes 23 gated tools (snapshot, screenshot, click, type_text, key_press, set_value,
 select_menu, read_text, wait_for, list_apps, focus_app, open_app, read_file, write_file,
-exec) over newline-delimited JSON-RPC 2.0. Each tool call runs as one `RunSession` step —
+exec, plus the M12 browser tools browser_navigate, browser_snapshot, browser_get_text,
+browser_get_text_all, browser_get_attributes_all, browser_click, browser_type, browser_download)
+over newline-delimited JSON-RPC 2.0. Each tool call runs as one `RunSession` step —
 same policy gate, escalation classifier, `{{secret:*}}` resolution, redaction, and audit
 as plan execution. The effective grant envelope is printed to STDERR before serving
 (stdout is protocol-only); denied calls return `isError` and the session continues.
@@ -255,7 +268,9 @@ JSON action → execute it through a `RunSession` (same policy gate, grants, esc
 classifier, `{{secret:*}}` resolution, redaction, and audit as plan execution) → re-observe.
 Repeats until the model emits `done`, `--max-iters` is hit, or the provider errors.
 Action vocabulary: open_app, focus_app, snapshot, click, type_text, key_press, set_value,
-select_menu, read_text, wait_for, read_file, write_file, exec. Autonomous and non-interactive
+select_menu, read_text, wait_for, read_file, write_file, exec, plus the M12 browser actions
+browser_navigate, browser_snapshot, browser_get_text, browser_get_text_all, browser_get_attributes_all,
+browser_click, browser_type, browser_wait_for, browser_screenshot, browser_download. Autonomous and non-interactive
 (auto-approves confirmations; safety comes from the grant envelope + escalation classifier +
 secure-field refusal). Prints the effective grant envelope first; the whole run is one
 session-run in the store and every executed action is audited.

@@ -4,7 +4,7 @@ use operator_core::types::{Step, StepType};
 use serde_json::Value;
 
 use tokio::time::{timeout, Duration};
-use tracing::{debug, info};
+use tracing::info;
 
 use crate::client::{discover_chrome_ws_url, launch_chrome, BrowserClient};
 use crate::error::BrowserError;
@@ -17,6 +17,65 @@ use crate::error::BrowserError;
 /// the surrounding quotes, so embed it bare (not inside your own quotes).
 fn js_string(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+/// Default auto-wait for a selector to appear before acting on it (ms).
+const ELEMENT_WAIT_MS: u64 = 5_000;
+
+/// Builds a JS expression that polls for `document.querySelector(<sel_literal>)`
+/// to appear (up to `timeout_ms`), then resolves with `body(el)` — where `body`
+/// is a JS expression referencing the bound element `el`. Rejects with
+/// "Element not found" on timeout. This gives every selector-based action the
+/// same auto-wait as Playwright, so a step run right after navigation (before
+/// the element renders) polls instead of failing immediately.
+fn wait_and_eval(sel_literal: &str, body: &str, timeout_ms: u64) -> String {
+    format!(
+        r#"
+        new Promise((resolve, reject) => {{
+            const sel = {sel_literal};
+            const deadline = Date.now() + {timeout_ms};
+            const tick = () => {{
+                const el = document.querySelector(sel);
+                if (el) {{
+                    try {{ resolve(((el) => ({body}))(el)); }}
+                    catch (e) {{ reject(e); }}
+                }} else if (Date.now() > deadline) {{
+                    reject(new Error('Element not found: ' + sel));
+                }} else {{
+                    setTimeout(tick, 100);
+                }}
+            }};
+            tick();
+        }})
+        "#
+    )
+}
+
+/// Profile-isolation options for the browser lane (M12). By default the lane
+/// launches its OWN Chrome in an ephemeral, empty profile — never the user's
+/// logged-in one — and refuses to attach to a foreign Chrome.
+#[derive(Debug, Clone)]
+pub struct BrowserLaunchOptions {
+    /// Operator-owned profile dir. `None` = a fresh ephemeral dir per run
+    /// (removed on close). A named dir keeps the profile across runs
+    /// ("stay logged in to site X").
+    pub user_data_dir: Option<std::path::PathBuf>,
+    /// Run Chrome headless (default true). Headed is needed for human takeover.
+    pub headless: bool,
+    /// Allow attaching to / using a Chrome the lane did NOT launch — i.e. the
+    /// user's real, possibly logged-in profile. Off by default; gated by the
+    /// `browser.real_profile` grant (which escalates).
+    pub allow_real_profile: bool,
+}
+
+impl Default for BrowserLaunchOptions {
+    fn default() -> Self {
+        Self {
+            user_data_dir: None,
+            headless: true,
+            allow_real_profile: false,
+        }
+    }
 }
 
 /// Executor for browser automation steps.
@@ -32,6 +91,12 @@ pub struct BrowserExecutor {
 
     /// Chrome debugging port.
     port: u16,
+
+    /// Profile isolation options (M12).
+    options: BrowserLaunchOptions,
+
+    /// The ephemeral profile dir we created (removed on close), if any.
+    ephemeral_profile: Option<std::path::PathBuf>,
 }
 
 impl BrowserExecutor {
@@ -42,6 +107,8 @@ impl BrowserExecutor {
             client: None,
             allow_domains,
             port: 9222, // Default Chrome debugging port
+            options: BrowserLaunchOptions::default(),
+            ephemeral_profile: None,
         }
     }
 
@@ -51,23 +118,68 @@ impl BrowserExecutor {
         self
     }
 
-    /// Connect to Chrome (launch if needed).
+    /// Set profile-isolation options (M12).
+    pub fn with_options(mut self, options: BrowserLaunchOptions) -> Self {
+        self.options = options;
+        self
+    }
+
+    /// Whether the CDP client is connected.
+    pub fn is_connected(&self) -> bool {
+        self.client.is_some()
+    }
+
+    /// Resolve the profile dir to launch with: a caller-named dir, or a fresh
+    /// ephemeral dir under the app data dir (tracked for cleanup).
+    fn resolve_profile_dir(&mut self) -> std::path::PathBuf {
+        if let Some(ref dir) = self.options.user_data_dir {
+            return dir.clone();
+        }
+        let base = dirs::data_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("operator-jack")
+            .join("browser-profiles");
+        // Unique per run: port + process id (Date/rand are unavailable here).
+        let dir = base.join(format!("ephemeral-{}-{}", self.port, std::process::id()));
+        self.ephemeral_profile = Some(dir.clone());
+        dir
+    }
+
+    /// Connect to Chrome. In the default (isolated) mode this launches our own
+    /// Chrome in an operator-owned profile and REFUSES to attach to a foreign
+    /// Chrome already on the port. Attaching to a pre-existing (user) Chrome
+    /// requires `allow_real_profile` (the escalating `browser.real_profile`
+    /// grant).
     pub async fn connect(&mut self) -> Result<(), BrowserError> {
-        // Try to connect to existing Chrome first
-        match discover_chrome_ws_url(self.port).await {
-            Ok(ws_url) => {
-                info!("Connecting to existing Chrome at port {}", self.port);
+        let existing = discover_chrome_ws_url(self.port).await;
+
+        if self.options.allow_real_profile {
+            // Explicitly permitted: attach to an existing Chrome if present.
+            if let Ok(ws_url) = existing {
+                info!(
+                    "Attaching to existing Chrome at port {} (browser.real_profile granted)",
+                    self.port
+                );
                 self.client = Some(BrowserClient::connect(ws_url).await?);
+                self.enable_domains().await?;
                 return Ok(());
             }
-            Err(e) => {
-                debug!("Could not connect to existing Chrome: {}", e);
-            }
+        } else if existing.is_ok() {
+            // Isolated mode + a foreign Chrome is already on the port: refuse,
+            // rather than silently ride the user's logged-in session.
+            return Err(BrowserError::ConnectionError(format!(
+                "a Chrome is already listening on port {} that Operator Jack did not launch; \
+                 refusing to attach to a non-owned browser (grant `browser.real_profile` to \
+                 override, or use a different port)",
+                self.port
+            )));
         }
 
-        // Launch Chrome
-        info!("Launching new Chrome instance");
-        self.chrome_process = Some(launch_chrome(self.port).await?);
+        // Launch our own isolated Chrome.
+        let profile_dir = self.resolve_profile_dir();
+        info!("Launching isolated Chrome instance");
+        self.chrome_process =
+            Some(launch_chrome(self.port, &profile_dir, self.options.headless).await?);
 
         // Wait for Chrome to be ready
         let mut attempts = 0;
@@ -85,13 +197,20 @@ impl BrowserExecutor {
             }
         }
 
-        // Enable required CDP domains
-        let client = self.client.as_ref().unwrap();
+        self.enable_domains().await?;
+        info!("Browser executor ready");
+        Ok(())
+    }
+
+    /// Enable the CDP domains the executor relies on.
+    async fn enable_domains(&self) -> Result<(), BrowserError> {
+        let client = self
+            .client
+            .as_ref()
+            .ok_or_else(|| BrowserError::ConnectionError("Not connected".to_string()))?;
         client.enable_domain("Page").await?;
         client.enable_domain("Runtime").await?;
         client.enable_domain("DOM").await?;
-
-        info!("Browser executor ready");
         Ok(())
     }
 
@@ -132,6 +251,12 @@ impl BrowserExecutor {
             StepType::BrowserScreenshot => self.handle_screenshot(client, &step.params).await,
             StepType::BrowserWaitFor => self.handle_wait_for(client, &step.params).await,
             StepType::BrowserScroll => self.handle_scroll(client, &step.params).await,
+            StepType::BrowserGetTextAll => self.handle_get_text_all(client, &step.params).await,
+            StepType::BrowserGetAttributesAll => {
+                self.handle_get_attributes_all(client, &step.params).await
+            }
+            StepType::BrowserSnapshot => self.handle_snapshot(client, &step.params).await,
+            StepType::BrowserDownload => self.handle_download(client, &step.params).await,
             _ => Err(BrowserError::CdpError(format!(
                 "Unsupported browser step type: {:?}",
                 step.step_type
@@ -156,16 +281,41 @@ impl BrowserExecutor {
 
         let frame_id = client.navigate(url).await?;
 
-        // Wait for navigation to complete
+        // Wait for the document to actually finish loading, rather than a blind
+        // fixed sleep (M12): poll until readyState is "complete" and we've left
+        // about:blank, up to `wait_ms` (default 15s). Best-effort — if the deadline
+        // passes we proceed anyway so a slow/streaming page doesn't hard-fail.
         let wait_ms = params
             .get("wait_ms")
             .and_then(|v| v.as_u64())
-            .unwrap_or(1000);
-        tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+            .unwrap_or(15_000);
+        let poll_every = 150u64;
+        let max_polls = (wait_ms / poll_every).max(1);
+        // Give the navigation a moment to commit before the first check so we
+        // don't read the previous document's "complete" state.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let mut loaded = false;
+        for _ in 0..max_polls {
+            let ready = client
+                .execute_js(
+                    "(document.readyState === 'complete' && location.href !== 'about:blank')"
+                        .to_string(),
+                )
+                .await
+                .ok()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if ready {
+                loaded = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(poll_every)).await;
+        }
 
         Ok(serde_json::json!({
             "frame_id": frame_id,
-            "url": url
+            "url": url,
+            "loaded": loaded
         }))
     }
 
@@ -180,22 +330,10 @@ impl BrowserExecutor {
             .and_then(|v| v.as_str())
             .ok_or_else(|| BrowserError::CdpError("Missing 'selector' parameter".to_string()))?;
 
-        // Use JavaScript to find and click the element.
+        // Auto-wait for the element, then click it.
         let sel = js_string(selector);
-        let script = format!(
-            r#"
-            (function() {{
-                const el = document.querySelector({sel});
-                if (!el) throw new Error('Element not found: ' + {sel});
-                const rect = el.getBoundingClientRect();
-                el.click();
-                return {{
-                    x: rect.left + rect.width / 2,
-                    y: rect.top + rect.height / 2
-                }};
-            }})()
-            "#
-        );
+        let body = "(() => { const r = el.getBoundingClientRect(); el.scrollIntoView({block:'center'}); el.click(); return { x: r.left + r.width/2, y: r.top + r.height/2 }; })()";
+        let script = wait_and_eval(&sel, body, ELEMENT_WAIT_MS);
 
         let result = client.execute_js(script).await?;
         Ok(result)
@@ -217,22 +355,13 @@ impl BrowserExecutor {
             .and_then(|v| v.as_str())
             .ok_or_else(|| BrowserError::CdpError("Missing 'text' parameter".to_string()))?;
 
-        // Use JavaScript to focus and set value.
+        // Auto-wait for the element, then focus and set its value.
         let sel = js_string(selector);
         let val = js_string(text);
-        let script = format!(
-            r#"
-            (function() {{
-                const el = document.querySelector({sel});
-                if (!el) throw new Error('Element not found: ' + {sel});
-                el.focus();
-                el.value = {val};
-                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                return true;
-            }})()
-            "#
+        let body = format!(
+            "(() => {{ el.focus(); el.value = {val}; el.dispatchEvent(new Event('input', {{bubbles:true}})); el.dispatchEvent(new Event('change', {{bubbles:true}})); return true; }})()"
         );
+        let script = wait_and_eval(&sel, &body, ELEMENT_WAIT_MS);
 
         client.execute_js(script).await?;
         Ok(serde_json::json!({ "typed": text.len() }))
@@ -250,14 +379,10 @@ impl BrowserExecutor {
             .ok_or_else(|| BrowserError::CdpError("Missing 'selector' parameter".to_string()))?;
 
         let sel = js_string(selector);
-        let script = format!(
-            r#"
-            (function() {{
-                const el = document.querySelector({sel});
-                if (!el) throw new Error('Element not found: ' + {sel});
-                return el.textContent || el.innerText || '';
-            }})()
-            "#
+        let script = wait_and_eval(
+            &sel,
+            "el.textContent || el.innerText || ''",
+            ELEMENT_WAIT_MS,
         );
 
         let text = client.execute_js(script).await?;
@@ -282,15 +407,8 @@ impl BrowserExecutor {
 
         let sel = js_string(selector);
         let attr = js_string(attribute);
-        let script = format!(
-            r#"
-            (function() {{
-                const el = document.querySelector({sel});
-                if (!el) throw new Error('Element not found: ' + {sel});
-                return el.getAttribute({attr}) || '';
-            }})()
-            "#
-        );
+        let body = format!("el.getAttribute({attr}) || ''");
+        let script = wait_and_eval(&sel, &body, ELEMENT_WAIT_MS);
 
         let value = client.execute_js(script).await?;
         Ok(value)
@@ -324,14 +442,32 @@ impl BrowserExecutor {
 
         let image_data = client.screenshot(full_page).await?;
 
-        // Encode to base64 for JSON response
-        let base64_data =
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &image_data);
+        // Write the PNG to a file and return its PATH — never base64 into the
+        // store (M12): a screenshot could be large and would bloat the audit DB.
+        let out_dir = params
+            .get("output_dir")
+            .and_then(|v| v.as_str())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                dirs::data_dir()
+                    .unwrap_or_else(std::env::temp_dir)
+                    .join("operator-jack")
+                    .join("screenshots")
+            });
+        std::fs::create_dir_all(&out_dir)
+            .map_err(|e| BrowserError::CdpError(format!("failed to create screenshot dir: {e}")))?;
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = out_dir.join(format!("browser-{nanos}.png"));
+        std::fs::write(&path, &image_data)
+            .map_err(|e| BrowserError::CdpError(format!("failed to write screenshot: {e}")))?;
 
         Ok(serde_json::json!({
             "format": "png",
             "full_page": full_page,
-            "data": base64_data,
+            "path": path.to_string_lossy(),
             "size_bytes": image_data.len()
         }))
     }
@@ -390,6 +526,184 @@ impl BrowserExecutor {
         }
     }
 
+    /// Handle browser.get_text_all: text of ALL elements matching the selector.
+    async fn handle_get_text_all(
+        &self,
+        client: &BrowserClient,
+        params: &Value,
+    ) -> Result<Value, BrowserError> {
+        let selector = params
+            .get("selector")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| BrowserError::CdpError("Missing 'selector' parameter".to_string()))?;
+        let sel = js_string(selector);
+        let script = format!(
+            "Array.from(document.querySelectorAll({sel})).map(el => (el.textContent || el.innerText || '').trim())"
+        );
+        let arr = client.execute_js(script).await?;
+        let count = arr.as_array().map(|a| a.len()).unwrap_or(0);
+        Ok(serde_json::json!({ "count": count, "items": arr }))
+    }
+
+    /// Handle browser.get_attributes_all: one attribute from ALL matching elements.
+    async fn handle_get_attributes_all(
+        &self,
+        client: &BrowserClient,
+        params: &Value,
+    ) -> Result<Value, BrowserError> {
+        let selector = params
+            .get("selector")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| BrowserError::CdpError("Missing 'selector' parameter".to_string()))?;
+        let attribute = params
+            .get("attribute")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| BrowserError::CdpError("Missing 'attribute' parameter".to_string()))?;
+        let sel = js_string(selector);
+        let attr = js_string(attribute);
+        // For href/src, prefer the resolved DOM property so callers get absolute URLs.
+        let script = format!(
+            "Array.from(document.querySelectorAll({sel})).map(el => {{ const p = el[{attr}]; return (p !== undefined && p !== null && typeof p !== 'object') ? String(p) : (el.getAttribute({attr}) || ''); }})"
+        );
+        let arr = client.execute_js(script).await?;
+        let count = arr.as_array().map(|a| a.len()).unwrap_or(0);
+        Ok(serde_json::json!({ "count": count, "items": arr }))
+    }
+
+    /// Handle browser.snapshot: a compact list of the page's interactive/labeled
+    /// elements with `bref` ids (browser refs), the lane analogue of ui.snapshot.
+    async fn handle_snapshot(
+        &self,
+        client: &BrowserClient,
+        params: &Value,
+    ) -> Result<Value, BrowserError> {
+        let max = params
+            .get("max_elements")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(80);
+        // Enumerate actionable/labeled elements; tag each with a stable-ish
+        // nth-of-match selector the agent can act on via `selector`.
+        let script = format!(
+            r#"
+            (() => {{
+                const sels = ['a[href]','button','input','textarea','select','[role=button]','[onclick]','h1','h2','h3'];
+                const seen = new Set();
+                const out = [];
+                for (const s of sels) {{
+                    const nodes = document.querySelectorAll(s);
+                    for (let i = 0; i < nodes.length; i++) {{
+                        const el = nodes[i];
+                        if (seen.has(el)) continue; seen.add(el);
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width === 0 && rect.height === 0) continue;
+                        const label = (el.getAttribute('aria-label') || el.value || el.textContent || '').trim().slice(0, 80);
+                        out.push({{
+                            tag: el.tagName.toLowerCase(),
+                            type: el.getAttribute('type') || null,
+                            text: label,
+                            href: el.getAttribute('href') || null,
+                            selector: s + ':nth-of-type(' + (i + 1) + ')'
+                        }});
+                        if (out.length >= {max}) return {{ title: document.title, url: location.href, elements: out }};
+                    }}
+                }}
+                return {{ title: document.title, url: location.href, elements: out }};
+            }})()
+            "#
+        );
+        let snap = client.execute_js(script).await?;
+        Ok(snap)
+    }
+
+    /// Handle browser.download: point Chrome's download dir at a target folder,
+    /// then either navigate to `url` or click `selector`, and wait for a file to
+    /// finish downloading. Returns the downloaded file path.
+    async fn handle_download(
+        &self,
+        client: &BrowserClient,
+        params: &Value,
+    ) -> Result<Value, BrowserError> {
+        let dir = params
+            .get("dir")
+            .and_then(|v| v.as_str())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                dirs::download_dir()
+                    .unwrap_or_else(std::env::temp_dir)
+                    .join("operator-jack")
+            });
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| BrowserError::CdpError(format!("failed to create download dir: {e}")))?;
+
+        // Snapshot existing files so we can detect the new one.
+        let before: std::collections::HashSet<std::path::PathBuf> = std::fs::read_dir(&dir)
+            .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).collect())
+            .unwrap_or_default();
+
+        // Allow downloads to the target dir.
+        client
+            .send(
+                "Page.setDownloadBehavior",
+                Some(serde_json::json!({
+                    "behavior": "allow",
+                    "downloadPath": dir.to_string_lossy(),
+                })),
+            )
+            .await?;
+
+        // Trigger the download.
+        if let Some(url) = params.get("url").and_then(|v| v.as_str()) {
+            if !self.is_url_allowed(url) {
+                return Err(BrowserError::DomainNotAllowed(url.to_string()));
+            }
+            // Anchor-click download keeps us on the page (navigation to a file
+            // can abort the CDP page). Fall back to location for direct files.
+            let u = js_string(url);
+            let script = format!(
+                "(() => {{ const a = document.createElement('a'); a.href = {u}; a.download = ''; document.body.appendChild(a); a.click(); a.remove(); return true; }})()"
+            );
+            client.execute_js(script).await?;
+        } else if let Some(selector) = params.get("selector").and_then(|v| v.as_str()) {
+            let sel = js_string(selector);
+            let script = wait_and_eval(&sel, "(el.click(), true)", ELEMENT_WAIT_MS);
+            client.execute_js(script).await?;
+        } else {
+            return Err(BrowserError::CdpError(
+                "browser.download needs a 'url' or 'selector'".to_string(),
+            ));
+        }
+
+        // Wait for a new, complete file (no .crdownload) to appear.
+        let timeout_ms = params
+            .get("timeout_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(30_000);
+        let polls = (timeout_ms / 250).max(1);
+        for _ in 0..polls {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            if let Ok(rd) = std::fs::read_dir(&dir) {
+                for entry in rd.flatten() {
+                    let path = entry.path();
+                    if before.contains(&path) {
+                        continue;
+                    }
+                    let is_partial = path.extension().map(|e| e == "crdownload").unwrap_or(false);
+                    if !is_partial {
+                        let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                        return Ok(serde_json::json!({
+                            "path": path.to_string_lossy(),
+                            "size_bytes": size
+                        }));
+                    }
+                }
+            }
+        }
+        Err(BrowserError::Timeout(format!(
+            "no download completed within {timeout_ms}ms in {}",
+            dir.display()
+        )))
+    }
+
     /// Handle browser.scroll step.
     async fn handle_scroll(
         &self,
@@ -405,7 +719,8 @@ impl BrowserExecutor {
         Ok(serde_json::json!({ "x": x, "y": y }))
     }
 
-    /// Close the executor and cleanup.
+    /// Close the executor and cleanup: disconnect CDP, kill the Chrome child we
+    /// launched, and remove the ephemeral profile dir (if any).
     pub async fn close(mut self) {
         if let Some(client) = self.client.take() {
             client.close().await;
@@ -413,6 +728,11 @@ impl BrowserExecutor {
 
         if let Some(mut process) = self.chrome_process.take() {
             let _ = process.kill().await;
+            let _ = process.wait().await;
+        }
+
+        if let Some(dir) = self.ephemeral_profile.take() {
+            let _ = std::fs::remove_dir_all(&dir);
         }
 
         info!("Browser executor closed");

@@ -112,6 +112,17 @@ fn action_step_type(name: &str) -> Option<StepType> {
         "read_file" => StepType::SysReadFile,
         "write_file" => StepType::SysWriteFile,
         "exec" => StepType::SysExec,
+        // Web (browser lane, M12) — an isolated Chrome for scraping/automation.
+        "browser_navigate" => StepType::BrowserNavigate,
+        "browser_snapshot" => StepType::BrowserSnapshot,
+        "browser_click" => StepType::BrowserClick,
+        "browser_type" => StepType::BrowserType,
+        "browser_get_text" => StepType::BrowserGetText,
+        "browser_get_text_all" => StepType::BrowserGetTextAll,
+        "browser_get_attributes_all" => StepType::BrowserGetAttributesAll,
+        "browser_wait_for" => StepType::BrowserWaitFor,
+        "browser_screenshot" => StepType::BrowserScreenshot,
+        "browser_download" => StepType::BrowserDownload,
         _ => return None,
     })
 }
@@ -137,6 +148,18 @@ Available actions (args mirror the step's params):
 - wait_for        {"app": "X", "selector": {"role": "AXWindow"}, "timeout_ms": 5000}
 - read_file       {"path": "~/x.txt"} / write_file {"path": "~/x.txt", "content": "..."} / exec {"command": "ls", "args": ["-la"]}
 - human_takeover  {"prompt": "log in, then I'll continue"}     hand control to the human for logins/CAPTCHAs, then resume
+
+Web actions (an isolated Chrome — use these to scrape or automate websites):
+- browser_navigate           {"url": "https://example.com"}                  open a URL (waits for load)
+- browser_snapshot           {}                                              list the page's links/buttons/inputs with CSS selectors
+- browser_get_text           {"selector": "h1"}                              text of the first match
+- browser_get_text_all       {"selector": ".item .title"}                    text of ALL matches → array (use for scraping lists)
+- browser_get_attributes_all {"selector": "a.next", "attribute": "href"}     an attribute from ALL matches → array
+- browser_click              {"selector": "a.next"}                          click (e.g. pagination); then re-scrape
+- browser_type               {"selector": "input[name=q]", "text": "query"}
+- browser_wait_for           {"selector": ".loaded", "timeout_ms": 8000}
+- browser_download           {"url": "https://.../file.csv"}                 download a file; returns its path
+- browser_screenshot         {}                                              save a PNG; returns its path
 
 Rules:
 - Take snapshot first to discover element refs, THEN act on a ref. Refs are only valid until the next snapshot.

@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "name": "Browser scrape (M12)",
+  "description": "Navigate to a page, then extract all matching items and their links. Uses a self-contained data: URL so it runs offline (no network / interception).",
+  "mode": "unsafe",
+  "steps": [
+    {
+      "id": "navigate",
+      "type": "browser.navigate",
+      "params": {
+        "url": "data:text/html,%3Ch1%3EShop%3C/h1%3E%3Cul%3E%3Cli%20class=item%3E%3Ca%20href=/a%3EAlpha%3C/a%3E%3C/li%3E%3Cli%20class=item%3E%3Ca%20href=/b%3EBeta%3C/a%3E%3C/li%3E%3C/ul%3E"
+      }
+    },
+    {
+      "id": "titles",
+      "type": "browser.get_text_all",
+      "params": { "selector": "li.item a" }
+    },
+    {
+      "id": "links",
+      "type": "browser.get_attributes_all",
+      "params": { "selector": "li.item a", "attribute": "href" }
+    }
+  ]
+}

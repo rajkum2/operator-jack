@@ -236,6 +236,82 @@ fn tools() -> Vec<ToolDef> {
                 "required": ["command"]
             }),
         },
+        // Browser lane (M12) — an isolated Chrome for web scraping/automation.
+        ToolDef {
+            name: "browser_navigate",
+            step_type: StepType::BrowserNavigate,
+            description: "Open a URL in an isolated Chrome and wait for it to load.",
+            schema: || json!({
+                "type": "object",
+                "properties": {"url": {"type": "string"}},
+                "required": ["url"]
+            }),
+        },
+        ToolDef {
+            name: "browser_snapshot",
+            step_type: StepType::BrowserSnapshot,
+            description: "List the current page's links/buttons/inputs with CSS selectors (the browser analogue of ui.snapshot).",
+            schema: || json!({"type": "object", "properties": {"max_elements": {"type": "integer"}}}),
+        },
+        ToolDef {
+            name: "browser_get_text",
+            step_type: StepType::BrowserGetText,
+            description: "Get the text of the first element matching a CSS selector.",
+            schema: || json!({
+                "type": "object",
+                "properties": {"selector": {"type": "string"}},
+                "required": ["selector"]
+            }),
+        },
+        ToolDef {
+            name: "browser_get_text_all",
+            step_type: StepType::BrowserGetTextAll,
+            description: "Get the text of ALL elements matching a CSS selector as a JSON array (scrape a list).",
+            schema: || json!({
+                "type": "object",
+                "properties": {"selector": {"type": "string"}},
+                "required": ["selector"]
+            }),
+        },
+        ToolDef {
+            name: "browser_get_attributes_all",
+            step_type: StepType::BrowserGetAttributesAll,
+            description: "Get one attribute (e.g. href) from ALL matching elements as a JSON array.",
+            schema: || json!({
+                "type": "object",
+                "properties": {"selector": {"type": "string"}, "attribute": {"type": "string"}},
+                "required": ["selector", "attribute"]
+            }),
+        },
+        ToolDef {
+            name: "browser_click",
+            step_type: StepType::BrowserClick,
+            description: "Click the element matching a CSS selector (e.g. a pagination link).",
+            schema: || json!({
+                "type": "object",
+                "properties": {"selector": {"type": "string"}},
+                "required": ["selector"]
+            }),
+        },
+        ToolDef {
+            name: "browser_type",
+            step_type: StepType::BrowserType,
+            description: "Type text into an input matching a CSS selector.",
+            schema: || json!({
+                "type": "object",
+                "properties": {"selector": {"type": "string"}, "text": {"type": "string"}},
+                "required": ["selector", "text"]
+            }),
+        },
+        ToolDef {
+            name: "browser_download",
+            step_type: StepType::BrowserDownload,
+            description: "Download a file (by URL or by clicking a selector) and return its path.",
+            schema: || json!({
+                "type": "object",
+                "properties": {"url": {"type": "string"}, "selector": {"type": "string"}, "dir": {"type": "string"}}
+            }),
+        },
     ]
 }
 

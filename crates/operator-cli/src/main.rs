@@ -3082,9 +3082,15 @@ fn cmd_browser_doctor(cli: &Cli) -> Result<()> {
 
 /// Launch Chrome with remote debugging.
 async fn cmd_browser_launch_async(_cli: &Cli, port: u16) -> Result<()> {
-    let mut child = operator_exec_browser::launch_chrome(port).await?;
+    // Launch in an operator-owned profile under the app data dir — never the
+    // user's real Chrome profile (M12 isolation). Headed so the window is usable.
+    let profile_dir = resolve_data_dir()
+        .join("browser-profiles")
+        .join(format!("launch-{port}"));
+    let mut child = operator_exec_browser::launch_chrome(port, &profile_dir, false).await?;
 
     println!("Chrome launched with remote debugging on port {}", port);
+    println!("Isolated profile: {}", profile_dir.display());
     println!("Press Ctrl+C to stop");
 
     // Wait for the process

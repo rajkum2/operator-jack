@@ -9,7 +9,7 @@
 ## Quick Start (For New Session)
 
 1. Read this file completely
-2. Read the roadmap: `MASTER_PLAN.md` (authoritative, M7-M15). Newest spec: `SPEC_FREEZE_V0.11.md` (M11 long-horizon & supervision); prior: `SPEC_FREEZE_V0.10.md` (M10 native agent loop), `SPEC_FREEZE_V0.9.md` (M9 MCP server mode), `SPEC_FREEZE_V0.8.md` (M8 safety envelope), `SPEC_FREEZE_V0.7.md` (M7 perception), `SPEC_FREEZE_V0.6.md` (M5 browser), `SPEC_FREEZE_V0.5.md` (M6 skills, retroactive); base contract: `SPEC_FREEZE_V0.2.md`
+2. Read the roadmap: `MASTER_PLAN.md` (authoritative, M7-M15). Newest spec: `SPEC_FREEZE_V0.12.md` (M12 web autonomy — browser lane wiring); prior: `SPEC_FREEZE_V0.11.md` (M11 long-horizon & supervision), `SPEC_FREEZE_V0.10.md` (M10 native agent loop), `SPEC_FREEZE_V0.9.md` (M9 MCP server mode), `SPEC_FREEZE_V0.8.md` (M8 safety envelope), `SPEC_FREEZE_V0.7.md` (M7 perception), `SPEC_FREEZE_V0.6.md` (M5 browser), `SPEC_FREEZE_V0.5.md` (M6 skills, retroactive); base contract: `SPEC_FREEZE_V0.2.md`
 3. Check `VERSION_LOG` below for what changed last
 4. Check `CURRENT_STATE` below for what's built vs pending
 5. Check `NEXT_ACTIONS` for what to do next
@@ -22,7 +22,7 @@
 - **Name:** Operator Jack (`operator-jack`)
 - **What:** macOS-first CLI tool for deterministic computer automation
 - **Architecture:** Instruction → Plan (typed JSON steps) → Policy Gate → Executors → Logs → Result
-- **Three execution lanes:** System (Rust), UI/Accessibility (Swift helper via IPC), Browser/CDP (M5 — CLI subcommands only; plan-lane wiring is M12)
+- **Three execution lanes:** System (Rust), UI/Accessibility (Swift helper via IPC), Browser/CDP (M5 executor; wired into plans/agent/MCP in M12 via an isolated per-run Chrome)
 - **Repo root:** `/Users/kirankumaralugonda/operator-jack/`
 - **Language:** Rust (core) + Swift (macOS helper)
 
@@ -34,6 +34,7 @@
 |------|---------|
 | `PROJECT_CONTEXT.md` | THIS FILE — resume context, version log, state tracker |
 | `MASTER_PLAN.md` | Authoritative forward roadmap (M7-M15) |
+| `SPEC_FREEZE_V0.12.md` | M12 spec — web autonomy (browser lane wired into plans/agent/MCP, profile isolation, browser.snapshot/get_text_all/get_attributes_all/download) |
 | `SPEC_FREEZE_V0.11.md` | M11 spec — long-horizon & supervision (Paused status, checkpoint/approval tables, ui.human_takeover, resume, logs --follow/prune) |
 | `SPEC_FREEZE_V0.10.md` | M10 spec — native agent loop (provider `chat`, observe→propose→execute→re-observe, agent mode semantics) |
 | `SPEC_FREEZE_V0.9.md` | M9 spec — MCP server mode (RunSession, mcp serve, 15-tool surface over JSON-RPC-over-stdio) |
@@ -47,10 +48,10 @@
 | `SPEC_FREEZE_V0.1.md` | Previous spec version (archived, do not implement from) |
 | `crates/operator-cli/` | CLI binary (`operator-jack`, clap) |
 | `crates/operator-core/` | Types, validation, interpolation, redaction, config |
-| `crates/operator-runtime/` | Execution loop, policy gates, retry/timeout |
+| `crates/operator-runtime/` | Execution loop, policy gates, retry/timeout; browser lane bridge (M12: `browser_lane`) |
 | `crates/operator-store/` | SQLite persistence (rusqlite) |
 | `crates/operator-exec-system/` | sys.* step handlers |
-| `crates/operator-exec-browser/` | browser.* CDP executor (M5) — tokio-tungstenite + reqwest |
+| `crates/operator-exec-browser/` | browser.* CDP executor — tokio-tungstenite + reqwest (M5; wired into plans/agent/MCP in M12) |
 | `crates/operator-ipc/` | NDJSON IPC client for Swift helper |
 | `crates/operator-planner/` | LLM planner (M4) — Kimi/OpenAI/Anthropic/Ollama |
 | `crates/operator-skills/` | Skills system (M6) — manifest parse/validate/expand |
@@ -84,6 +85,20 @@
 ---
 
 ## VERSION_LOG
+
+### v0.13.0 — 2026-07-09
+**Status:** M12 COMPLETE. Web autonomy — the browser lane is wired into plans, the agent loop, and MCP, running against an isolated per-run Chrome. The M5 CDP executor (previously reachable only via the `browser` CLI subcommands, with `browser.*` plan steps hard-rejected) is now a first-class lane. Crate count unchanged at 11. 155 Rust tests + 10 Swift tests pass.
+**Changes:**
+1. **Browser lane wired into plans/agent/MCP** — the `browser.*` hard-reject in `validation.rs` is removed and a `"browser"` arm was added to the engine's lane dispatch; browser steps now route through policy, redaction, and audit like every other lane.
+2. **Profile isolation** (security-critical, landed first): the lane launches its OWN Chrome with a dedicated `--user-data-dir` — ephemeral per-run by default (removed on close) or a named persistent profile — never the user's real logged-in profile. It refuses to attach to a Chrome it didn't launch unless the escalating `browser.real_profile` capability is granted. Headless by default (headed available for human takeover).
+3. **Sync↔async bridge** — new `operator-runtime::browser_lane` module. `BrowserLane` runs a dedicated OS thread with its own multi-threaded tokio runtime; the sync engine talks to it over std channels only, so it is safe from the sync CLI and from within any other runtime (no nested-runtime panic). `BrowserHandle` lazily spawns Chrome on the first browser step and tears it down at run end. `operator-runtime` gains an `operator-exec-browser` dependency.
+4. **New step types**: `browser.get_text_all` (querySelectorAll → array), `browser.get_attributes_all` (attribute from all matches → array; href/src resolved to absolute), `browser.snapshot` (compact interactive-element list with CSS-selector refs — the browser analogue of `ui.snapshot`), `browser.download` (`Page.setDownloadBehavior` + wait-for-complete → file path).
+5. **Robustness**: auto-waiting selectors (get_text/get_attribute/click/type poll up to 5s for the element, Playwright-style); real navigation waits (poll `document.readyState` complete, not a fixed sleep); screenshots write a PNG file and return its path (never base64 into the store).
+6. **Agent + MCP browser catalogs**: MCP gains 8 browser tools (browser_navigate, browser_snapshot, browser_get_text, browser_get_text_all, browser_get_attributes_all, browser_click, browser_type, browser_download; 23 tools total); the agent loop gains those plus browser_screenshot and browser_wait_for (10 browser actions).
+7. Examples: `docs/examples/browser-navigate.json` and a new `docs/examples/browser-scrape.json` now validate (moved out of the removed `pending-m12/` holding dir).
+8. Version bumped to 0.13.0 (workspace + Swift `helperVersion`). Created `SPEC_FREEZE_V0.12.md` (M12 web-autonomy spec).
+9. **Verified live**: a plan navigate → get_text → get_text_all → get_attributes_all → snapshot scraped a page (get_text_all → ["Alpha","Beta","Gamma"], get_attributes_all(href) → ["/a","/b","/c"]); tests use self-contained `data:` URLs because this machine's antivirus intercepts live http navigations. Full gate green: `cargo fmt` clean, `cargo clippy -D warnings` clean, 155 Rust tests, 10 Swift tests, `check-examples.sh` all valid.
+10. **Known-partial**: downloads implemented but not exercised against a live download server here; `browser.snapshot` is a flat interactive-element list, not a full a11y tree; browser CLI subcommands' `--dry-run`/`--json` polish deferred.
 
 ### v0.12.0 — 2026-07-09
 **Status:** M11 COMPLETE. Long-horizon autonomy & supervision — runs now pause, survive process exit, and resume after human approval; plus live supervision (follow, steer), pause notifications, transcript compaction, kill-switch hardening, and audit-log pruning. Crate count unchanged at 11. 152 Rust tests + 10 Swift tests pass.
@@ -175,7 +190,7 @@
 4. New `browser.*` step types (see SPEC_FREEZE_V0.6.md); `allow_domains` enforcement for browser navigation
 5. CLI: `operator-jack browser doctor|launch|navigate|screenshot`; browser executor tests added
 6. Created SPEC_FREEZE_V0.6.md (M5 browser spec)
-7. **Caveat:** the browser lane is reachable ONLY via the `browser` CLI subcommands. Browser steps in plans are NOT yet wired into the engine (a plan with `browser.*` steps fails validation) — plan-lane wiring is milestone M12 in MASTER_PLAN.md
+7. **Caveat (as of v0.7.0):** the browser lane was reachable ONLY via the `browser` CLI subcommands; plan `browser.*` steps failed validation. *Resolved in M12 (v0.13.0): the browser lane is now wired into plans/agent/MCP via an isolated per-run Chrome.*
 
 ### v0.6.0 — 2026-03
 **Status:** M6 complete. Skills system (reusable parameterized macros). 113 tests pass (5 new skill tests). Workspace grows to 8 crates.
@@ -362,7 +377,7 @@
 - [x] SPEC_FREEZE_V0.6.md (M5 browser spec)
 - [x] operator-exec-browser crate — hand-rolled CDP client (tokio-tungstenite + reqwest, NOT chromiumoxide)
 - [x] tokio async runtime added (operator-cli + operator-exec-browser)
-- [x] CLI: browser doctor/launch/navigate/screenshot (browser lane is CLI-only; plan-lane wiring is M12)
+- [x] CLI: browser doctor/launch/navigate/screenshot (M5); the browser lane is now also wired into plans/agent/MCP (M12)
 - [x] Phase B (v0.7.1): audit fixes, Swift helper correctness, security fixes (mode ceiling, JS-injection escaping, exec/ui-lane timeouts, char-boundary panics), docs reconciliation
 - [x] Swift test target (macos-helper/Tests/OperatorMacOSHelperTests): 9 tests
 - [x] `make check-examples` harness (validate examples + dry-run skills), wired into CI
@@ -406,6 +421,15 @@
 - [x] M11 retention/pruning: `logs prune [--older-than-days N] [--keep M]` (also `logs --prune`) deletes old runs + cascades to step_results/events/checkpoints/approvals
 - [x] M11 kill-switch hardening: SIGINT/SIGTERM sets the cancel flag; the engine always writes a terminal `Cancelled` status + `RunCancelled` event and disconnects the helper
 - [x] 152 Rust tests + 10 Swift tests passing (v0.12.0)
+- [x] SPEC_FREEZE_V0.12.md (M12 web-autonomy spec)
+- [x] M12 browser lane wired into plans/agent/MCP: the `browser.*` hard-reject is removed from `validation.rs` and a `"browser"` arm added to the engine lane dispatch; browser steps now route through policy/redaction/audit like every other lane
+- [x] M12 profile isolation (security-critical, landed first): the lane launches its OWN Chrome with a dedicated `--user-data-dir` (ephemeral per-run by default, removed on close; or a named persistent profile) — never the user's real logged-in profile; refuses to attach to a Chrome it didn't launch unless the escalating `browser.real_profile` capability is granted; headless by default (headed available for human takeover)
+- [x] M12 sync↔async bridge: new `operator-runtime::browser_lane` module — `BrowserLane` runs a dedicated OS thread with its own multi-threaded tokio runtime, the sync engine talks over std channels only (safe from the sync CLI and from within any other runtime, no nested-runtime panic); `BrowserHandle` lazily spawns Chrome on the first browser step and tears it down at run end; `operator-runtime` gains an `operator-exec-browser` dependency
+- [x] M12 new step types: `browser.get_text_all` (querySelectorAll → array), `browser.get_attributes_all` (attribute from all matches → array; href/src resolved to absolute), `browser.snapshot` (compact interactive-element list with CSS-selector refs — the browser analogue of `ui.snapshot`), `browser.download` (`Page.setDownloadBehavior` + wait-for-complete → file path)
+- [x] M12 robustness: auto-waiting selectors (get_text/get_attribute/click/type poll up to 5s for the element), real navigation waits (poll `document.readyState` complete, not a fixed sleep), screenshots write a PNG file and return its path (never base64 into the store)
+- [x] M12 agent + MCP browser catalogs: MCP gains 8 browser tools (browser_navigate, browser_snapshot, browser_get_text, browser_get_text_all, browser_get_attributes_all, browser_click, browser_type, browser_download; 23 tools total); the agent loop gains those plus browser_screenshot and browser_wait_for (10 browser actions)
+- [x] docs/examples/browser-navigate.json + docs/examples/browser-scrape.json (both validate; moved out of the removed pending-m12/ dir)
+- [x] 155 Rust tests + 10 Swift tests passing (v0.13.0)
 
 ### Milestone Status
 
@@ -418,7 +442,7 @@
 | M3b | DONE | UI executor v1 polish: selectMenu, setValue, inspect, anyOf selectors, element_ref, evidence hooks |
 | Phase A | DONE | Production packaging: binary rename, config system, Makefile, CI, Homebrew, install script, LICENSE, CHANGELOG, enhanced doctor |
 | M4 | DONE | LLM planner (natural language → typed steps; Kimi/OpenAI/Anthropic/Ollama) |
-| M5 | DONE | Browser executor (CDP) — `browser` CLI subcommands only; plan-lane wiring is M12 |
+| M5 | DONE | Browser executor (CDP) — `browser` CLI subcommands; plan/agent/MCP-lane wiring landed in M12 |
 | M6 | DONE | Skills system (manifest → plan expansion; skill list/validate/run) |
 | Phase B | DONE | Stabilization (v0.7.1): audit/security fixes, Swift correctness + test target, docs reconciliation |
 | M7 | DONE | Perception / Observation API: ui.snapshot (compact AX + refs), ui.screenshot, Electron/Chromium AX enablement, path selectors, doctor Screen Recording check |
@@ -426,7 +450,8 @@
 | M9 | DONE | MCP server mode: RunSession (ad-hoc gated single-step exec), operator-mcp crate (JSON-RPC-over-stdio, 15 tools), `operator-jack mcp serve --grants`, session-as-run audit; verified live grant enforcement over MCP |
 | M10 | DONE | Native agent loop: operator-agent crate (observe→propose one JSON action→execute via RunSession→re-observe), provider `chat()`, `operator-jack agent` CLI; verified live on Calculator via local Ollama |
 | M11 | DONE | Long-horizon autonomy & supervision: pause/resume (`RunStatus::Paused`, checkpoint + approval tables), escalation→pause, `ui.human_takeover`, `run/agent --resume`, `approvals` CLI, `logs --follow`/`steer`/notifications, context compaction, `logs prune`, kill-switch hardening; verified live |
-| M12-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md — M12 web autonomy (next), M13 hands+control flow, M14 native macOS lane, M15 trust/residency |
+| M12 | DONE | Web autonomy: browser lane wired into plans/agent/MCP, profile isolation (isolated per-run Chrome; `browser.real_profile` escalation), extraction verbs (`browser.get_text_all`/`get_attributes_all`/`snapshot`/`download`), sync↔async `browser_lane` bridge; verified live |
+| M13-M15 | NOT STARTED | New roadmap in MASTER_PLAN.md — M13 hands+control flow (next), M14 native macOS lane, M15 trust/residency |
 
 ---
 
@@ -434,10 +459,10 @@
 
 **Immediate next steps (in order) — see MASTER_PLAN.md for full detail:**
 
-1. **M12 — Web autonomy (v0.13.0)** — browser profile isolation → plan/agent-lane wiring → real extraction; unlocks the "scrape a website, install what you need" scenario. Depends on M7, M8, M10 (done); M9 tool catalog; M11 auth takeover (done).
-2. **M13 — Hands completion & deterministic control flow (v0.14.0)** — actuation verbs (scroll/right-click/double-click/hover/drag, coordinate clicks), plan schema v2 control flow (foreach/if/repeat_until with iteration caps), data/network steps (list_dir, parse_csv/json, http.request), resume-aware batches.
+1. **M13 — Hands completion & deterministic control flow (v0.14.0)** — actuation verbs (scroll/right-click/double-click/hover/drag, coordinate clicks), plan schema v2 control flow (foreach/if/repeat_until with iteration caps), data/network steps (list_dir, parse_csv/json, http.request), resume-aware batches. Depends on M7 (refs); M11 (resume-aware batches only); M10 (skill-compiler stretch only).
+2. **M14 — Native macOS integration lane (v0.15.0)** — `script.applescript`/`jxa`/`shortcuts.run` step types (exec-grade grants), Automation TCC handling in `doctor`, document steps (`doc.pdf_text`, `doc.ocr` via Vision.framework), recipe skills for Mail/Calendar/Finder.
 
-**MASTER_PLAN.md is the authoritative roadmap for M7-M15.** M0-M11 plus Phase B (v0.7.1) are complete. M12 is next.
+**MASTER_PLAN.md is the authoritative roadmap for M7-M15.** M0-M12 plus Phase B (v0.7.1) are complete. M13 is next.
 
 ---
 
@@ -486,4 +511,4 @@ When multiple AX elements match and no `index` is given: interactive mode prompt
 
 ---
 
-*Last updated: 2026-07-09 — M10 COMPLETE (v0.11.0). Native agent loop: a new `operator-agent` crate (workspace now 11 crates) implementing Operator Jack's own closed loop — `run_agent(goal, provider, &mut RunSession, max_iters)` observes the screen, asks the model for ONE JSON action, executes it through M9's RunSession (same policy gate / grants / escalation / `{{secret:*}}` / redaction / audit as plan execution), then re-observes; repeats until the model emits `done`, `--max-iters` is hit, or the provider errors. The `LlmProvider` trait gains `chat(system, user)` (implemented for Kimi/OpenAI/Anthropic/Ollama; `generate_plan` is now `chat` + extraction), and a new `operator-jack agent "<goal>"` CLI runs the loop autonomously (auto-approves; relies on the grant envelope + escalation classifier + secure-field refusal). Verified live on Calculator via a local Ollama model (6 audited steps under one run). M0-M10 plus Phase B done. 146 Rust tests + 10 Swift tests passing. Next: M11 (long-horizon autonomy & supervision) per MASTER_PLAN.md.*
+*Last updated: 2026-07-09 — M12 COMPLETE (v0.13.0). Web autonomy — the browser lane is now wired into plans, the agent loop, and MCP (the M5 CDP executor was previously reachable only via the `browser` CLI subcommands, with `browser.*` plan steps hard-rejected). Profile isolation landed first (security-critical): a per-run `BrowserHandle` launches the lane's OWN isolated Chrome with a dedicated `--user-data-dir` (ephemeral per-run by default, removed on close; or a named persistent profile) — never the user's real logged-in profile — and refuses to attach to a Chrome it didn't launch unless the escalating `browser.real_profile` capability is granted; headless by default (headed available for human takeover). A new `operator-runtime::browser_lane` module bridges the sync engine to the async CDP client over std channels (a dedicated OS thread running its own multi-threaded tokio runtime — no nested-runtime panic). New extraction verbs `browser.get_text_all`/`get_attributes_all`/`snapshot`/`download`, auto-waiting selectors (poll up to 5s), and real navigation waits (`document.readyState`); the agent and MCP catalogs gained browser tools (MCP → 23 tools; agent → 10 browser actions). Crate count unchanged at 11. M0-M12 plus Phase B done. 155 Rust tests + 10 Swift tests passing. Spec: SPEC_FREEZE_V0.12.md. Next: M13 (hands completion & deterministic control flow) per MASTER_PLAN.md.*

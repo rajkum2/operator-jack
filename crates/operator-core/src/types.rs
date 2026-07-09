@@ -93,6 +93,20 @@ pub enum StepType {
     BrowserWaitFor,
     #[serde(rename = "browser.scroll")]
     BrowserScroll,
+    /// Extract text from ALL elements matching a selector (querySelectorAll → array).
+    #[serde(rename = "browser.get_text_all")]
+    BrowserGetTextAll,
+    /// Extract one attribute from ALL matching elements (→ array).
+    #[serde(rename = "browser.get_attributes_all")]
+    BrowserGetAttributesAll,
+    /// Compact snapshot of the page's interactive elements with ref ids (M12) —
+    /// the browser-lane analogue of `ui.snapshot`, so the agent loop is
+    /// lane-agnostic.
+    #[serde(rename = "browser.snapshot")]
+    BrowserSnapshot,
+    /// Download a file (via a URL or by clicking a link) to a target dir.
+    #[serde(rename = "browser.download")]
+    BrowserDownload,
 }
 
 impl StepType {
@@ -141,7 +155,11 @@ impl StepType {
             | StepType::BrowserExecuteJs
             | StepType::BrowserScreenshot
             | StepType::BrowserWaitFor
-            | StepType::BrowserScroll => "browser",
+            | StepType::BrowserScroll
+            | StepType::BrowserGetTextAll
+            | StepType::BrowserGetAttributesAll
+            | StepType::BrowserSnapshot
+            | StepType::BrowserDownload => "browser",
         }
     }
 
@@ -187,6 +205,10 @@ impl StepType {
             StepType::BrowserScreenshot => "browser.screenshot",
             StepType::BrowserWaitFor => "browser.wait_for",
             StepType::BrowserScroll => "browser.scroll",
+            StepType::BrowserGetTextAll => "browser.get_text_all",
+            StepType::BrowserGetAttributesAll => "browser.get_attributes_all",
+            StepType::BrowserSnapshot => "browser.snapshot",
+            StepType::BrowserDownload => "browser.download",
         }
     }
 }
@@ -241,6 +263,10 @@ impl std::str::FromStr for StepType {
             "browser.screenshot" => Ok(StepType::BrowserScreenshot),
             "browser.wait_for" => Ok(StepType::BrowserWaitFor),
             "browser.scroll" => Ok(StepType::BrowserScroll),
+            "browser.get_text_all" => Ok(StepType::BrowserGetTextAll),
+            "browser.get_attributes_all" => Ok(StepType::BrowserGetAttributesAll),
+            "browser.snapshot" => Ok(StepType::BrowserSnapshot),
+            "browser.download" => Ok(StepType::BrowserDownload),
             _ => Err(format!("Unknown step type: {}", s)),
         }
     }

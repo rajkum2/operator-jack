@@ -59,13 +59,16 @@ pub fn risk_level(step_type: &StepType) -> RiskLevel {
         | StepType::BrowserGetText
         | StepType::BrowserGetAttribute
         | StepType::BrowserWaitFor
-        | StepType::BrowserScroll => RiskLevel::Medium,
+        | StepType::BrowserScroll
+        | StepType::BrowserGetTextAll
+        | StepType::BrowserGetAttributesAll
+        | StepType::BrowserDownload => RiskLevel::Medium,
 
         // Browser high risk
         StepType::BrowserExecuteJs => RiskLevel::High,
 
-        // Browser low risk
-        StepType::BrowserScreenshot => RiskLevel::Low,
+        // Browser low risk (read-only)
+        StepType::BrowserScreenshot | StepType::BrowserSnapshot => RiskLevel::Low,
     }
 }
 

@@ -63,14 +63,10 @@ pub fn validate_plan(plan: &Plan) -> Result<(), Vec<OperatorError>> {
             )));
         }
 
-        // 5. Check for unsupported browser.* types (this is handled by serde
-        //    deserialization, but we note it for completeness). Since StepType
-        //    is an enum, unknown types would have failed to parse. We validate
-        //    the step_type is known by checking it serializes correctly.
-        let type_str = step.step_type.to_string();
-        if type_str.starts_with("browser.") {
-            errors.push(OperatorError::unsupported_step_type(&type_str));
-        }
+        // 5. browser.* steps are wired into the engine as of M12 (the browser
+        //    lane runs them through an isolated Chrome over CDP), so they are no
+        //    longer rejected here. Unknown step types can't reach this point:
+        //    StepType is an enum, so serde deserialization already rejected them.
 
         // 6. Validate required params per step type
         if let Err(msg) = validate_step_params(&step.step_type, &step.params) {
@@ -215,6 +211,14 @@ pub fn validate_step_params(
         StepType::BrowserScreenshot => Ok(()),
         StepType::BrowserWaitFor => require_string_param(params, "selector"),
         StepType::BrowserScroll => Ok(()),
+        StepType::BrowserGetTextAll => require_string_param(params, "selector"),
+        StepType::BrowserGetAttributesAll => {
+            require_string_param(params, "selector")?;
+            require_string_param(params, "attribute")
+        }
+        StepType::BrowserSnapshot => Ok(()),
+        // browser.download: needs a `url` OR a `selector` to click; checked at runtime.
+        StepType::BrowserDownload => Ok(()),
     }
 }
 
