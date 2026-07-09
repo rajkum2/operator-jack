@@ -21,7 +21,7 @@ export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 # Build Rust workspace
 cd /Users/kirankumaralugonda/operator-jack && cargo build
 
-# Run Rust tests (164 tests)
+# Run Rust tests (166 tests)
 cargo test
 
 # Build Swift helper and run Swift tests (10 tests)
@@ -115,13 +115,19 @@ operator-jack/
 - `path` is a real matcher: suffix match on the computed traversal path (implemented in M7; was rejected-when-alone in Phase B)
 
 ### Testing
-- Rust: `cargo test` — unit tests in each crate's source files (164 tests)
+- Rust: `cargo test` — unit tests in each crate's source files (166 tests)
 - Swift: `cd macos-helper && swift test` — XCTest target at `Tests/OperatorMacOSHelperTests/` (10 tests; selector parsing + criteria). AX-dependent behavior is covered by the live acceptance harness.
 - Acceptance: `make check-examples` validates every golden plan in `docs/examples/` and dry-run-expands every skill. **No example or skill ships without passing it.** Run a plan live via `operator-jack run --plan-file <path> --mode unsafe --yes`.
 
 ## Spec Files
 
-- **MASTER_PLAN.md** — Authoritative forward roadmap (M7-M15). Read this for what's next.
+- **MASTER_PLAN.md** — Authoritative forward roadmap (M7-M15, now fully implemented as of v0.16.0). Read this for design context and the Future backlog.
+- **SPEC_FREEZE_V0.15.md** — M15 delta: trust, residency & measurement (undo journal + `operator-jack undo`, watch/daemon mode + launchd + single-instance run mutex, eval harness, signing/notarization scaffolding)
+- **SPEC_FREEZE_V0.14.md** — M14 delta: native macOS integration lane (`script.applescript`/`script.jxa`/`shortcuts.run` exec-grade, `doc.pdf_text` PDFKit, `doc.ocr` Vision, doctor Full Disk Access + Automation checks)
+- **SPEC_FREEZE_V0.13.md** — M13 delta: hands completion & deterministic control flow (`sys.list_dir`, `data.parse_csv`/`parse_json`, `http.request`, `ui.scroll`, `control.foreach`/`if`/`repeat_until`)
+- **SPEC_FREEZE_V0.12.md** — M12 delta: web autonomy (browser lane wired into plans/agent/MCP, profile isolation, `browser.snapshot`/`get_text_all`/`get_attributes_all`/`download`)
+- **SPEC_FREEZE_V0.11.md** — M11 delta: long-horizon & supervision (`Paused` status, checkpoint/approval tables, `ui.human_takeover`, resume, `logs --follow`/`prune`)
+- **SPEC_FREEZE_V0.10.md** — M10 delta: native agent loop (provider `chat`, observe→propose→execute→re-observe, agent mode semantics)
 - **SPEC_FREEZE_V0.9.md** — M9 delta: MCP server mode (`RunSession` ad-hoc gated single-step execution, `mcp serve`, 15-tool surface over JSON-RPC-over-stdio)
 - **SPEC_FREEZE_V0.8.md** — M8 delta: safety envelope (task-scoped grants, run budgets + `Partial` status, always-escalate classifier, redaction hardening)
 - **SPEC_FREEZE_V0.7.md** — M7 delta: observation API (`ui.snapshot`/`ui.screenshot`, element refs, Electron/Chromium AX enablement, `path` selector matching)
@@ -153,13 +159,13 @@ operator-jack/
 | M12 | DONE | Web autonomy: browser lane wired into plans/agent/MCP, profile isolation, extraction verbs |
 | M13 | DONE | Data/net steps (list_dir, parse_csv/json, http.request), ui.scroll, deterministic control flow (foreach/if/repeat_until) |
 | M14 | DONE | Native macOS lane: script.applescript/jxa, shortcuts.run, doc.pdf_text (PDFKit), doc.ocr (Vision), doctor TCC checks, calendar recipe skill |
-| M15 | NOT STARTED | New roadmap in MASTER_PLAN.md (M15=trust/residency) |
+| M15 | DONE | Trust/residency: undo journal + `operator-jack undo`, watch/daemon (triggers + launchd + run mutex), eval harness, signing scaffolding |
 
 > M13 note: only `ui.scroll` of the planned actuation verbs landed — right-click/double-click/hover/drag, coordinate clicks/scroll, typed `set_value`, window management, and Open/Save dialog helpers are deferred (see MASTER_PLAN.md / PROJECT_CONTEXT.md).
 
 ## Important Rules
 
-1. **Spec is normative.** Check the relevant SPEC_FREEZE (V0.2 base; V0.3 UI; V0.4 planner; V0.5 skills; V0.6 browser; V0.7 observation; V0.8 safety envelope; V0.9 MCP) before inventing behavior; check MASTER_PLAN.md for anything M10+.
+1. **Spec is normative.** Check the relevant SPEC_FREEZE (V0.2 base; V0.3 UI; V0.4 planner; V0.5 skills; V0.6 browser; V0.7 observation; V0.8 safety envelope; V0.9 MCP; V0.10 agent loop; V0.11 long-horizon/supervision; V0.12 web autonomy; V0.13 control flow + data steps; V0.14 native macOS lane; V0.15 trust/residency) before inventing behavior. The M7-M15 roadmap is fully implemented as of v0.16.0; see MASTER_PLAN.md for design context and the Future backlog.
 2. **Async allowed (M5+).** tokio is now a dependency (`operator-cli`, `operator-exec-browser`) for the browser/CDP lane. The old "no async / no tokio" rule is obsolete.
 3. **Every change must compile.** Run `cargo build && cargo test && cd macos-helper && swift build`.
 4. **Update PROJECT_CONTEXT.md** after completing milestones.
@@ -300,6 +306,31 @@ the run checkpoints, opens a pending approval, posts a macOS notification, and e
 run-id to continue (resume verifies the approval is granted and consumes a one-shot escalation
 allowance). `logs prune` bounds store growth by deleting old runs and cascading to their
 step_results/events/checkpoints/approvals.
+
+### Trust & Residency (M15)
+```
+operator-jack undo <run-id>                       # Reverse a run's filesystem mutations (in reverse order)
+operator-jack watch --plan-file <p> [--interval N] [--path <watch>] [--install-launchd]
+operator-jack eval <suite-dir> [--json]           # Run every *.json plan in a suite, score pass/fail
+```
+**Undo journal (reversibility):** for every real (non-dry-run) run the CLI sets `EngineConfig.undo_dir`
+to `<data_dir>/undo`, and the engine snapshots prior state before each mutating `sys.*` filesystem step
+(backup target or record newly-created for `write_file`/`append_file`/`copy_path`, copy-aside for
+`delete_path`, record from→to for `move_path`, record created dir for `mkdir`) into a manifest at
+`<undo_dir>/<run_id>/manifest.jsonl`. Applies to plan runs AND `RunSession` (agent/MCP) runs.
+`operator-jack undo <run-id>` replays the manifest in reverse (restore backups, remove created files,
+move back, restore deleted). Implemented in the new `operator-runtime::undo` module.
+
+**Watch/daemon mode:** `operator-jack watch` fires a saved plan on a schedule or a file change. Interval-only
+(`--interval N`) fires each tick; `--path <watch>` fires on mtime change (baselined at startup). A
+single-instance run mutex (PID file + live-PID check) serializes runs — a trigger that arrives while a run
+is in flight is QUEUED (pending), not dropped or run concurrently. `--install-launchd` writes
+`~/Library/LaunchAgents/com.operator-jack.watch.plist` (RunAtLoad + KeepAlive) and prints the
+`launchctl load`/`unload` commands. (User-activity-pause is NOT yet implemented.)
+
+**Eval harness (measurement):** `operator-jack eval <suite-dir>` runs every `*.json` plan in the suite,
+scores each pass (Succeeded, 0 failed steps) / fail, prints a results table + pass rate (`--json`
+supported), and exits non-zero if any plan fails. (A macOS CI runner for this is not yet wired.)
 
 ## Common Flags
 

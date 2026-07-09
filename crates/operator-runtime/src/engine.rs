@@ -52,6 +52,10 @@ pub struct EngineConfig {
     pub grants: Option<operator_core::grants::Grants>,
     /// Config-level run budget (M8). Intersected with the plan's (min wins).
     pub budget: Option<operator_core::grants::RunBudget>,
+    /// Root dir for the undo journal (M15). `None` disables copy-before-mutate.
+    /// When set, mutating `sys.*` steps back up prior state under
+    /// `<undo_dir>/<run_id>/` so `operator-jack undo <run-id>` can reverse them.
+    pub undo_dir: Option<std::path::PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -653,6 +657,17 @@ impl Engine {
                 // P1 fix: Dispatch execution with timeout enforcement.
                 // Uses dispatch_params (secrets resolved); the stored input_json
                 // above keeps the {{secret:*}} reference form.
+                // Undo journal (M15): copy-before-mutate for filesystem steps.
+                if let Some(ref undo_dir) = self.config.undo_dir {
+                    crate::undo::record(
+                        undo_dir,
+                        &run_id,
+                        &step.step_type,
+                        &dispatch_params,
+                        idx as u32,
+                    );
+                }
+
                 let exec_result = execute_with_timeout(
                     &step.step_type,
                     &dispatch_params,
@@ -1264,6 +1279,17 @@ impl RunSession {
         let _ = self.store.insert_step_result(&sr);
 
         let timeout = self.config.default_timeout_ms;
+        // Undo journal (M15): copy-before-mutate for filesystem steps.
+        if let Some(ref undo_dir) = self.config.undo_dir {
+            crate::undo::record(
+                undo_dir,
+                &self.run_id,
+                &step.step_type,
+                &dispatch,
+                idx as u32,
+            );
+        }
+
         let result = execute_with_timeout(
             &step.step_type,
             &dispatch,
@@ -1810,6 +1836,7 @@ mod session_tests {
             default_backoff_ms: 0,
             grants,
             budget: None,
+            undo_dir: None,
         }
     }
 

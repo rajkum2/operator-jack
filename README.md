@@ -1,12 +1,12 @@
 # Operator Jack
 
-Operator Jack is a local-first, privacy-respecting command-line tool for automating macOS tasks through structured JSON plans. It executes automation across three lanes -- system operations (files, processes, URLs), UI automation (macOS Accessibility API), and browser control (Chrome DevTools Protocol) -- with built-in policy gates, secret redaction, and an append-only audit log. Automation runs locally with no telemetry and no hidden background processes. The only feature that may make a network call is the optional LLM planner (the `do` command), which can use a cloud provider (Kimi/OpenAI/Anthropic) or a fully local Ollama model.
+Operator Jack is a local-first, privacy-respecting command-line tool for automating macOS tasks -- via structured JSON plans, reusable skills, an MCP tool surface, or a natural-language autonomous agent loop. It executes across several lanes: system operations (files, processes, URLs, data/HTTP), UI automation (macOS Accessibility API), browser control (Chrome DevTools Protocol), native scripting (AppleScript/JXA/Shortcuts), and document extraction (PDF text + OCR) -- with deterministic control flow (foreach/if/repeat_until), built-in policy gates and task-scoped grants, secret redaction, an append-only audit log, and an undo journal. Automation runs locally with no telemetry and no hidden background processes; the only network calls are the optional LLM planner/agent (the `do`/`agent` commands -- a cloud provider like Kimi/OpenAI/Anthropic, or a fully local Ollama model) and any explicit browser or `http.request` steps you include.
 
 ## Current Status
 
-**v0.7.1 — Milestones M0 through M6 are complete.** System, UI (Accessibility), and browser (CDP) lanes; an LLM-backed natural-language planner (Kimi, OpenAI, Anthropic, Ollama); and a skills system. 128 Rust tests + 9 Swift tests passing. See [`MASTER_PLAN.md`](MASTER_PLAN.md) for the M7-M15 roadmap.
+**v0.16.0 — Milestones M0 through M15 are complete; the M7-M15 roadmap is fully implemented.** System, UI (Accessibility), browser (CDP — wired into plans, the agent loop, and MCP), native-script (AppleScript/JXA/Shortcuts), and document (PDF text + OCR) lanes; an LLM-backed natural-language planner and a native autonomous **agent loop** (Kimi, OpenAI, Anthropic, Ollama); an **MCP server** exposing the gated executors as tools; a skills system; a safety envelope (task-scoped grants, run budgets, an always-escalate classifier, a Keychain secret store); pause/resume with human approvals; deterministic control flow and data/HTTP steps; and trust/residency features — an undo journal (`operator-jack undo`), watch/daemon mode, and an eval harness. 166 Rust tests + 10 Swift tests passing. See [`MASTER_PLAN.md`](MASTER_PLAN.md) for the M7-M15 design and the Future backlog.
 
-> **Note:** the browser (CDP) lane is currently reachable only via the `operator-jack browser` CLI subcommands; browser steps inside plans are not yet wired into the engine (that is milestone M12).
+> **Note:** a few milestones landed partial-scope (e.g. Developer ID signing is scaffolded in CI but no Gatekeeper-passing build is produced without a cert; exec seatbelt sandboxing is deferred). See [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) NEXT_ACTIONS for the honest post-roadmap backlog.
 
 ## Installation
 
@@ -112,9 +112,9 @@ Dry-run a plan to see what would happen without performing any actions:
 | `operator-jack skill validate <skill-file>` | Validate a skill manifest. |
 | `operator-jack skill run <name> --param key=value` | Expand a skill into a plan and run it. |
 
-### Browser (M5)
+### Browser (M5 + M12)
 
-Chrome DevTools Protocol automation. Currently exposed only through these CLI subcommands; browser steps inside plans are not yet wired into the engine (milestone M12).
+Chrome DevTools Protocol automation. These CLI subcommands drive Chrome directly; as of M12, `browser.*` steps also run inside plans, the agent loop, and MCP — through an isolated per-run Chrome, routed through policy, redaction, and audit like every other lane.
 
 | Command | Description |
 |---|---|
@@ -167,21 +167,23 @@ More examples are available in [`docs/examples/`](docs/examples/):
 
 ## Project Structure
 
-Operator Jack is organized as a Cargo workspace with nine crates:
+Operator Jack is organized as a Cargo workspace with eleven crates:
 
 ```
 operator-jack/
   Cargo.toml                  # Workspace root
   crates/
     operator-cli/             # CLI entry point (Clap argument parsing, output rendering)
-    operator-runtime/         # Execution engine (step loop, retries, cancellation)
+    operator-runtime/         # Execution engine (step loop, retries, cancellation, browser lane bridge, undo journal)
     operator-core/            # Shared types, plan validation, variable interpolation, redaction
     operator-store/           # SQLite persistence, JSONL audit log
-    operator-exec-system/     # sys.* executor (files, processes, URLs)
-    operator-exec-browser/    # browser.* executor (Chrome DevTools Protocol, M5)
+    operator-exec-system/     # sys.*/data.*/http.*/script.* executor (files, processes, URLs, data, scripting)
+    operator-exec-browser/    # browser.* executor (Chrome DevTools Protocol, M5; lane-wired in M12)
     operator-ipc/             # NDJSON stdio bridge to Swift macOS helper
-    operator-planner/         # LLM planner (M4) - Kimi/OpenAI/Anthropic/Ollama providers
+    operator-planner/         # LLM planner + agent-loop chat provider (M4/M10) - Kimi/OpenAI/Anthropic/Ollama
     operator-skills/          # Skills system (M6) - manifest parse/validate/expand
+    operator-mcp/             # MCP server (M9) - JSON-RPC over stdio, tools -> RunSession
+    operator-agent/           # Native agent loop (M10) - observe/propose/execute/re-observe
   macos-helper/               # Swift helper binary for macOS Accessibility API
   skills/                     # Built-in skill manifests (M6)
   docs/

@@ -2,6 +2,9 @@
 
 > **Status:** ACTIVE — this is the consolidated roadmap that supersedes `docs/ROADMAP.md` (M7/M8 as
 > defined there are absorbed/re-scoped below; see "Supersession" section).
+> **Implementation status:** M7-M15 implemented as of v0.16.0 (see PROJECT_CONTEXT.md VERSION_LOG;
+> some items are partial-scope — see the per-milestone specs and PROJECT_CONTEXT NEXT_ACTIONS). The
+> deliverable checkboxes below are the original plan of record and are intentionally left unchecked.
 > **Created:** 2026-07-08, from two verified analyses: the full-codebase audit (build/test/run
 > verification of v0.7.0) and the autonomy vision gap analysis (code-grounded + 2026 industry
 > research). Revised same day after a three-way adversarial review (feasibility vs code,

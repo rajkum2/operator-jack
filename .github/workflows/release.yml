@@ -26,6 +26,57 @@ jobs:
       - name: Build universal binaries
         run: make universal
 
+      # Developer ID signing + notarization (M15). Gatekeeper blocks unsigned
+      # downloaded binaries; a stable signed helper path also keeps TCC grants
+      # durable. Skips cleanly if the signing secrets are not set, so releases
+      # still build unsigned until an Apple Developer ID cert is configured.
+      # Required secrets: MACOS_CERT_P12 (base64 .p12), MACOS_CERT_PASSWORD,
+      # MACOS_SIGN_IDENTITY (e.g. "Developer ID Application: Name (TEAMID)"),
+      # AC_API_KEY_ID, AC_API_ISSUER_ID, AC_API_KEY_P8 (base64 App Store Connect key).
+      - name: Sign & notarize
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+          AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
+          AC_API_KEY_P8: ${{ secrets.AC_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MACOS_CERT_P12:-}" ] || [ -z "${MACOS_SIGN_IDENTITY:-}" ]; then
+            echo "Signing secrets not set — shipping UNSIGNED (Gatekeeper will warn on download)."
+            exit 0
+          fi
+          # Import the Developer ID cert into a temporary keychain.
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PW=$(uuidgen)
+          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PW" "$KEYCHAIN" >/dev/null
+          # Sign the binaries inside each tarball (hardened runtime, timestamped).
+          for bin in $(find dist -type f -name 'operator-jack' -o -name 'operator-macos-helper'); do
+            codesign --force --options runtime --timestamp \
+              --sign "$MACOS_SIGN_IDENTITY" "$bin"
+            codesign --verify --strict --verbose=2 "$bin"
+          done
+          # Notarize each release tarball via notarytool, then staple.
+          if [ -n "${AC_API_KEY_P8:-}" ]; then
+            echo "$AC_API_KEY_P8" | base64 --decode > "$RUNNER_TEMP/ac_key.p8"
+            for tarball in dist/operator-jack-*.tar.gz; do
+              xcrun notarytool submit "$tarball" \
+                --key "$RUNNER_TEMP/ac_key.p8" \
+                --key-id "$AC_API_KEY_ID" \
+                --issuer "$AC_API_ISSUER_ID" \
+                --wait
+            done
+          else
+            echo "App Store Connect API key not set — signed but NOT notarized."
+          fi
+
       - name: Get version from tag
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"

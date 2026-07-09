@@ -6,7 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-See [`MASTER_PLAN.md`](MASTER_PLAN.md) for the authoritative roadmap. Next: M15 (trust, residency & measurement).
+The M7-M15 roadmap in [`MASTER_PLAN.md`](MASTER_PLAN.md) is now COMPLETE (v0.16.0). Next: post-M15 hardening (close out the honestly-deferred items — exec seatbelt sandboxing, a Gatekeeper-passing signed build, watch user-activity-pause, an eval CI runner) and the MASTER_PLAN "Supersession & Future" backlog.
+
+## [0.16.0] - 2026-07-09
+
+M15 — Trust, residency & measurement. The final roadmap milestone: reversibility (an undo journal), unattended triggers (watch/daemon mode), a measured success rate (eval harness), and release-signing scaffolding — what lets a user run this unattended on their real machine.
+
+### Added
+- **Undo journal (reversibility)**: copy-before-mutate for filesystem `sys.*` steps. The CLI sets `EngineConfig.undo_dir` to `<data_dir>/undo` for every real (non-dry-run) run, and the engine snapshots prior state before each mutating step — backup target or record newly-created for `write_file`/`append_file`/`copy_path`, copy-aside for `delete_path`, record from→to for `move_path`, record created dir for `mkdir` — into a manifest at `<undo_dir>/<run_id>/manifest.jsonl`. Applies to plan runs AND `RunSession` (agent/MCP) runs. `operator-jack undo <run-id>` replays the manifest in reverse (restore backups, remove created files, move back, restore deleted). New `operator-runtime::undo` module.
+- **Watch/daemon mode**: `operator-jack watch --plan-file <p> [--interval N] [--path <watch>] [--install-launchd]`. Interval-only fires each tick; `--path` fires on mtime change (baselined at startup). A single-instance run mutex (PID file + live-PID check) serializes runs — a trigger that fires during a run is QUEUED (pending), not dropped or run concurrently. `--install-launchd` writes `~/Library/LaunchAgents/com.operator-jack.watch.plist` (RunAtLoad + KeepAlive) and prints the `launchctl load`/`unload` commands.
+- **Eval harness (measurement)**: `operator-jack eval <suite-dir>` runs every `*.json` plan in a suite, scores each pass (Succeeded, 0 failed steps) / fail, prints a results table + pass rate (`--json` supported), and exits non-zero if any plan fails.
+- **Signing & notarization scaffolding**: `release.yml` gains a "Sign & notarize" step (imports a Developer ID cert from secrets into a temp keychain, `codesign` with hardened runtime + timestamp, `notarytool` notarizes each tarball). It skips cleanly when signing secrets are unset. Required secrets: `MACOS_CERT_P12`, `MACOS_CERT_PASSWORD`, `MACOS_SIGN_IDENTITY`, `AC_API_KEY_ID`, `AC_API_ISSUER_ID`, `AC_API_KEY_P8`.
+- SPEC_FREEZE_V0.15.md (M15 trust/residency/measurement spec).
+
+### Note
+- Verified live: `undo` reversed an overwrite + create + delete run (3 mutations reversed, 0 failed); `watch` fired a plan on a file change (a new audited run) and stopped cleanly, and `--install-launchd` wrote a valid plist; `eval` ran a 3-plan suite → 3/3 (100%), exit 0. Full gate green: `cargo fmt`, `cargo clippy -D warnings`, 166 Rust tests, 10 Swift tests, and `check-examples.sh` all pass. Version 0.15.0 → 0.16.0 (workspace + Swift `helperVersion`).
+- Known-partial (stated honestly): exec sandboxing (seatbelt) is DEFERRED (a stretch item; the M8 grant/escalation gate + the undo journal + budgets already bound `sys.exec`); signing/notarization is SCAFFOLDED but needs an Apple Developer ID cert (unavailable here), so no Gatekeeper-passing build was produced; watch user-activity-pause is NOT implemented; the eval CI runner is not wired (it needs a self-hosted macOS session).
 
 ## [0.15.0] - 2026-07-09
 

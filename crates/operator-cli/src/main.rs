@@ -164,6 +164,35 @@ enum Commands {
     /// Stop a running execution
     Stop,
 
+    /// Reverse a run's filesystem mutations from its undo journal (M15)
+    Undo {
+        /// The run-id to undo (from `logs` or the run summary)
+        run_id: String,
+    },
+
+    /// Watch for a trigger and fire a plan unattended (M15). Runs are serialized
+    /// by a single-instance mutex; a trigger during a run is queued, not dropped.
+    Watch {
+        /// Plan file to run on each trigger
+        #[arg(long)]
+        plan_file: std::path::PathBuf,
+        /// Poll interval in seconds (also the file-change poll cadence)
+        #[arg(long, default_value = "60")]
+        interval: u64,
+        /// Optional path to watch; fire only when its mtime changes
+        #[arg(long)]
+        path: Option<std::path::PathBuf>,
+        /// Write a launchd plist to run this watch at login, then exit
+        #[arg(long)]
+        install_launchd: bool,
+    },
+
+    /// Run an eval suite (a dir of plan files) and report a pass rate (M15)
+    Eval {
+        /// Directory of `*.json` plan files to run
+        suite: std::path::PathBuf,
+    },
+
     /// Manage pending approvals for paused runs (M11)
     Approvals {
         #[command(subcommand)]
@@ -453,6 +482,20 @@ fn main() -> Result<()> {
             }
         }
         Commands::Stop => cmd_stop(&cli),
+        Commands::Undo { ref run_id } => cmd_undo(&cli, run_id),
+        Commands::Watch {
+            ref plan_file,
+            interval,
+            ref path,
+            install_launchd,
+        } => cmd_watch(
+            &cli,
+            plan_file,
+            *interval,
+            path.as_deref(),
+            *install_launchd,
+        ),
+        Commands::Eval { ref suite } => cmd_eval(&cli, suite),
         Commands::Approvals { ref action } => match action {
             ApprovalsAction::List { all } => cmd_approvals_list(&cli, *all),
             ApprovalsAction::Approve { id } => cmd_approvals_decide(&cli, id, true),
@@ -2289,6 +2332,328 @@ fn cmd_logs(cli: &Cli, run_id: Option<String>, full: bool) -> Result<()> {
 
 /// Reads the PID file from the data directory. If a running process is found,
 /// sends SIGTERM and waits up to 5 seconds. If still alive, sends SIGKILL.
+/// Reverses a run's filesystem mutations from its undo journal (M15).
+fn cmd_undo(cli: &Cli, run_id: &str) -> Result<()> {
+    let undo_dir = resolve_data_dir().join("undo");
+    match operator_runtime::undo::restore(&undo_dir, run_id) {
+        Ok(report) => {
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Undo of run {run_id}: {} reversed, {} failed",
+                    report.reversed, report.failed
+                );
+                for m in &report.messages {
+                    println!("  - {m}");
+                }
+                if report.reversed == 0 && report.failed == 0 {
+                    println!("  (no filesystem mutations recorded for this run)");
+                }
+            }
+            if report.failed > 0 {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
+        Err(e) => {
+            if cli.json {
+                println!("{}", serde_json::json!({ "error": e }));
+            } else {
+                eprintln!("Undo failed: {e}");
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Runs a plan to completion in-process and returns its summary WITHOUT exiting
+/// (unlike `cmd_run`/`cmd_exec`). Used by `watch` and `eval`. Validates, saves,
+/// then routes control-flow plans through the interpreter and flat plans through
+/// the engine. Writes/removes the PID file so it participates in the run mutex.
+fn run_plan_headless(cli: &Cli, plan: &Plan) -> Result<RunSummary> {
+    validate_plan(plan).map_err(|errs| {
+        anyhow::anyhow!(
+            "plan validation failed: {}",
+            errs.iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("; ")
+        )
+    })?;
+    let data_dir = resolve_data_dir();
+
+    if operator_runtime::control::has_control_flow(&plan.steps) {
+        use operator_runtime::engine::RunSession;
+        let mut config = build_engine_config(cli)?;
+        if matches!(plan.mode, Some(Mode::Safe)) {
+            config.mode = Mode::Safe;
+        }
+        config.allow_apps = intersect_allow(&config.allow_apps, plan.allow_apps.as_deref());
+        config.allow_domains =
+            intersect_allow(&config.allow_domains, plan.allow_domains.as_deref());
+        let store = open_store()?;
+        let mut session = RunSession::open(store, config, plan.grants.clone(), plan.budget.clone())
+            .map_err(|e| anyhow::anyhow!("failed to open session: {e}"))?;
+        let _ = write_pid_file(&data_dir, session.run_id());
+        let vars = plan.variables.clone().unwrap_or_default();
+        let _ = session.run_program(&plan.steps, vars);
+        let summary = session.finish();
+        let _ = remove_pid_file(&data_dir);
+        Ok(summary)
+    } else {
+        let store = open_store()?;
+        let plan_id = store.save_plan(plan).context("failed to save plan")?;
+        let config = build_engine_config(cli)?;
+        let store2 = open_store()?;
+        let mut engine = Engine::new(store2, config);
+        let data_dir_clone = data_dir.clone();
+        engine.set_on_run_created(move |rid| {
+            let _ = write_pid_file(&data_dir_clone, rid);
+        });
+        let result = engine.execute_plan(&plan_id);
+        let _ = remove_pid_file(&data_dir);
+        result.map_err(|e| anyhow::anyhow!("execution failed: {e}"))
+    }
+}
+
+/// True if another operator-jack run currently holds the PID file (a live PID).
+fn run_in_progress(data_dir: &Path) -> bool {
+    match read_pid_file(data_dir) {
+        Ok(Some((pid, _))) => {
+            // Signal 0 checks existence without killing.
+            Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+fn path_mtime(path: &Path) -> Option<std::time::SystemTime> {
+    // For a directory, use the latest mtime among its direct entries so new/
+    // changed files inside it trigger.
+    if path.is_dir() {
+        let mut latest = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        if let Ok(rd) = std::fs::read_dir(path) {
+            for e in rd.flatten() {
+                if let Ok(m) = e.metadata().and_then(|m| m.modified()) {
+                    if latest.map(|l| m > l).unwrap_or(true) {
+                        latest = Some(m);
+                    }
+                }
+            }
+        }
+        latest
+    } else {
+        std::fs::metadata(path).and_then(|m| m.modified()).ok()
+    }
+}
+
+/// Watch for a trigger and fire a plan unattended (M15). Serialized by the run
+/// mutex; a trigger during a run is queued (pending) and fired afterward.
+fn cmd_watch(
+    cli: &Cli,
+    plan_file: &Path,
+    interval: u64,
+    watch_path: Option<&Path>,
+    install_launchd: bool,
+) -> Result<()> {
+    if install_launchd {
+        return install_watch_launchd(plan_file, interval, watch_path);
+    }
+
+    let plan = read_plan_file(plan_file)?;
+    validate_plan(&plan).map_err(|e| anyhow::anyhow!("plan invalid: {} error(s)", e.len()))?;
+
+    let data_dir = resolve_data_dir();
+    let stop = Arc::new(AtomicBool::new(false));
+    let _ = set_ctrlc_handler(Arc::clone(&stop));
+
+    match watch_path {
+        Some(p) => eprintln!(
+            "operator-jack watch — firing {} when {} changes (poll {interval}s). Ctrl-C to stop.",
+            plan.name,
+            p.display()
+        ),
+        None => eprintln!(
+            "operator-jack watch — firing {} every {interval}s. Ctrl-C to stop.",
+            plan.name
+        ),
+    }
+
+    // Baseline mtime so a file-trigger doesn't fire immediately on startup.
+    let mut last_mtime = watch_path.and_then(path_mtime);
+    let mut pending = false;
+
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+
+        let triggered = match watch_path {
+            Some(p) => {
+                let m = path_mtime(p);
+                let changed = m != last_mtime;
+                last_mtime = m;
+                changed
+            }
+            None => true, // interval-only: every tick
+        };
+
+        if triggered || pending {
+            if run_in_progress(&data_dir) {
+                eprintln!("  (a run is in progress — trigger queued)");
+                pending = true;
+            } else {
+                pending = false;
+                match run_plan_headless(cli, &plan) {
+                    Ok(s) => eprintln!("  fired: run {} → {:?}", s.run_id, s.status),
+                    Err(e) => eprintln!("  run error: {e}"),
+                }
+            }
+        }
+
+        // Sleep the interval, but stay responsive to Ctrl-C.
+        let ticks = (interval * 4).max(1);
+        for _ in 0..ticks {
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
+    eprintln!("watch stopped.");
+    Ok(())
+}
+
+/// Writes a launchd LaunchAgent plist that runs this watch at login.
+fn install_watch_launchd(plan_file: &Path, interval: u64, watch_path: Option<&Path>) -> Result<()> {
+    let exe = std::env::current_exe().context("cannot resolve current executable")?;
+    let plan_abs = std::fs::canonicalize(plan_file).unwrap_or_else(|_| plan_file.to_path_buf());
+
+    let mut prog_args = vec![
+        exe.to_string_lossy().to_string(),
+        "watch".to_string(),
+        "--plan-file".to_string(),
+        plan_abs.to_string_lossy().to_string(),
+        "--interval".to_string(),
+        interval.to_string(),
+        "--yes".to_string(),
+    ];
+    if let Some(p) = watch_path {
+        let p_abs = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        prog_args.push("--path".to_string());
+        prog_args.push(p_abs.to_string_lossy().to_string());
+    }
+    let args_xml: String = prog_args
+        .iter()
+        .map(|a| format!("    <string>{}</string>", xml_escape(a)))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let label = "com.operator-jack.watch";
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{label}</string>
+  <key>ProgramArguments</key>
+  <array>
+{args_xml}
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+</dict>
+</plist>
+"#
+    );
+
+    let home = std::env::var("HOME").context("HOME not set")?;
+    let dir = PathBuf::from(&home).join("Library/LaunchAgents");
+    std::fs::create_dir_all(&dir)?;
+    let dest = dir.join(format!("{label}.plist"));
+    std::fs::write(&dest, plist).with_context(|| format!("failed to write {}", dest.display()))?;
+
+    println!("Wrote launchd agent: {}", dest.display());
+    println!("Load it with:  launchctl load {}", dest.display());
+    println!("Unload it with: launchctl unload {}", dest.display());
+    Ok(())
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Runs an eval suite: every `*.json` plan in `suite` is executed and scored
+/// pass (Succeeded, no failed steps) / fail, reporting a pass rate (M15).
+fn cmd_eval(cli: &Cli, suite: &Path) -> Result<()> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(suite)
+        .with_context(|| format!("cannot read suite dir {}", suite.display()))?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().map(|x| x == "json").unwrap_or(false))
+        .collect();
+    files.sort();
+
+    if files.is_empty() {
+        bail!("no .json plan files in {}", suite.display());
+    }
+
+    let mut results: Vec<(String, bool, String)> = Vec::new();
+    for f in &files {
+        let name = f
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let outcome = match read_plan_file(f) {
+            Ok(plan) => match run_plan_headless(cli, &plan) {
+                Ok(s) => {
+                    let pass = matches!(s.status, RunStatus::Succeeded) && s.steps_failed == 0;
+                    (pass, format!("{:?} ({} steps)", s.status, s.steps_total))
+                }
+                Err(e) => (false, format!("error: {e}")),
+            },
+            Err(e) => (false, format!("parse error: {e}")),
+        };
+        results.push((name, outcome.0, outcome.1));
+    }
+
+    let passed = results.iter().filter(|r| r.1).count();
+    let total = results.len();
+    let rate = (passed as f64 / total as f64) * 100.0;
+
+    if cli.json {
+        let arr: Vec<_> = results
+            .iter()
+            .map(|(n, p, d)| serde_json::json!({ "task": n, "pass": p, "detail": d }))
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "passed": passed, "total": total, "pass_rate": rate, "results": arr
+            }))?
+        );
+    } else {
+        println!("Eval suite: {}", suite.display());
+        for (n, p, d) in &results {
+            println!("  [{}] {:<40} {}", if *p { "PASS" } else { "FAIL" }, n, d);
+        }
+        println!();
+        println!("Pass rate: {passed}/{total} ({rate:.0}%)");
+    }
+
+    if passed < total {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 fn cmd_stop(cli: &Cli) -> Result<()> {
     let data_dir = resolve_data_dir();
 
@@ -2562,6 +2927,13 @@ fn build_engine_config(cli: &Cli) -> Result<EngineConfig> {
         default_backoff_ms: cfg.default_retry_backoff_ms,
         grants: cfg.grants.clone(),
         budget: cfg.budget.clone(),
+        // Undo journal (M15) is on by default in `--dry-run`? No — only for real
+        // runs. Disabled under dry-run (nothing mutates).
+        undo_dir: if cli.dry_run {
+            None
+        } else {
+            Some(resolve_data_dir().join("undo"))
+        },
     })
 }
 
