@@ -89,6 +89,9 @@
 
 ## VERSION_LOG
 
+### v0.17.0 — 2026-07-13
+**Status:** Post-roadmap feature (not a MASTER_PLAN milestone). **Local settings & control dashboard.** `operator-jack dashboard [--port 7311] [--no-open]` serves a self-contained web UI on `127.0.0.1` to *view* status/runs/approvals/skills/capabilities and *edit* the config (mode, providers, timeouts, retries, allow-lists, grants, budget) + manage keychain secrets — without hand-writing TOML. New `crates/operator-cli/src/dashboard.rs` (+ embedded `dashboard.html`) served with `tiny_http`; new `Store::set_busy_timeout` for safe concurrent DB access under WAL. **Security:** loopback-only bind; a random per-session token gates every `/api/*` call; `Host`-header validation (DNS-rebinding defense); `application/json`-only POSTs; no CORS. API keys are never written to config (env/keychain only); secret VALUES are never returned; config saves load via `load_from` (no env-override contamination) and write atomically. Verified live: config save round-trip incl. grants/budget, validation, live runs/approvals/skills reads, keychain secret set/list/delete, and the auth + Host guards. 169 Rust tests (3 new) + 10 Swift tests; fmt + clippy `-D warnings` clean; check-examples valid.
+
 ### v0.16.0 — 2026-07-09
 **Status:** M15 COMPLETE (partial-scope — see item 6). **The M7-M15 roadmap is now fully implemented.** Trust, residency & measurement — reversibility (an undo journal), unattended triggers (watch/daemon mode), a measured success rate (eval harness), and release-signing scaffolding: what lets a user run this unattended on their real machine. Crate count unchanged at 11 (undo ships as a new `operator-runtime` module, not a crate). 166 Rust tests + 10 Swift tests pass.
 **Changes:**

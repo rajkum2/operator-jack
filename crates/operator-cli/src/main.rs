@@ -5,6 +5,8 @@
 //! coordinate between `operator-core`, `operator-store`, and
 //! `operator-runtime`.
 
+mod dashboard;
+
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -191,6 +193,16 @@ enum Commands {
     Eval {
         /// Directory of `*.json` plan files to run
         suite: std::path::PathBuf,
+    },
+
+    /// Launch the local settings & control dashboard (a web UI on 127.0.0.1)
+    Dashboard {
+        /// Port to bind on 127.0.0.1
+        #[arg(long, default_value = "7311")]
+        port: u16,
+        /// Do not auto-open the browser
+        #[arg(long)]
+        no_open: bool,
     },
 
     /// Manage pending approvals for paused runs (M11)
@@ -496,6 +508,10 @@ fn main() -> Result<()> {
             *install_launchd,
         ),
         Commands::Eval { ref suite } => cmd_eval(&cli, suite),
+        Commands::Dashboard { port, no_open } => {
+            let helper = resolve_helper_path(&cli).map(|p| p.to_string_lossy().to_string());
+            dashboard::serve(*port, *no_open, helper)
+        }
         Commands::Approvals { ref action } => match action {
             ApprovalsAction::List { all } => cmd_approvals_list(&cli, *all),
             ApprovalsAction::Approve { id } => cmd_approvals_decide(&cli, id, true),

@@ -26,3 +26,6 @@ dirs = "6"
 chrono.workspace = true
 ulid.workspace = true
 tokio = { version = "1", features = ["full"] }
+# Local settings dashboard (127.0.0.1) — sync, tiny dep tree, matches the sync CLI.
+tiny_http = "0.12"
+toml = "0.8"
