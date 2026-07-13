@@ -95,6 +95,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f0e0fee31ef5ed1ba1316088939cea399010ed7731dba877ed44aeb407a75ea"
 
 [[package]]
+name = "ascii"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d92bec98840b8f03a5ff5413de5293bfcd8bf96467cf5452609f939ec6f5de16"
+
+[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -202,6 +208,12 @@ dependencies = [
  "wasm-bindgen",
  "windows-link",
 ]
+
+[[package]]
+name = "chunked_transfer"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e4de3bc4ea267985becf712dc6d9eed8b04c953b3fcfb339ebc87acd9804901"
 
 [[package]]
 name = "clap"
@@ -1183,7 +1195,7 @@ dependencies = [
 
 [[package]]
 name = "operator-agent"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "operator-core",
  "operator-planner",
@@ -1196,7 +1208,7 @@ dependencies = [
 
 [[package]]
 name = "operator-cli"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1212,7 +1224,9 @@ dependencies = [
  "operator-skills",
  "operator-store",
  "serde_json",
+ "tiny_http",
  "tokio",
+ "toml",
  "tracing",
  "tracing-subscriber",
  "ulid",
@@ -1220,7 +1234,7 @@ dependencies = [
 
 [[package]]
 name = "operator-core"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
@@ -1236,7 +1250,7 @@ dependencies = [
 
 [[package]]
 name = "operator-exec-browser"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1257,7 +1271,7 @@ dependencies = [
 
 [[package]]
 name = "operator-exec-system"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "glob",
  "operator-core",
@@ -1270,7 +1284,7 @@ dependencies = [
 
 [[package]]
 name = "operator-ipc"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "operator-core",
  "serde",
@@ -1282,7 +1296,7 @@ dependencies = [
 
 [[package]]
 name = "operator-mcp"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "operator-core",
  "operator-runtime",
@@ -1295,7 +1309,7 @@ dependencies = [
 
 [[package]]
 name = "operator-planner"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "operator-core",
@@ -1311,7 +1325,7 @@ dependencies = [
 
 [[package]]
 name = "operator-runtime"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "chrono",
  "operator-core",
@@ -1329,7 +1343,7 @@ dependencies = [
 
 [[package]]
 name = "operator-skills"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -1345,7 +1359,7 @@ dependencies = [
 
 [[package]]
 name = "operator-store"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "chrono",
  "operator-core",
@@ -2095,6 +2109,18 @@ dependencies = [
  "flate2",
  "jpeg-decoder",
  "weezl",
+]
+
+[[package]]
+name = "tiny_http"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "389915df6413a2e74fb181895f933386023c71110878cd0825588928e64cdc82"
+dependencies = [
+ "ascii",
+ "chunked_transfer",
+ "httpdate",
+ "log",
 ]
 
 [[package]]

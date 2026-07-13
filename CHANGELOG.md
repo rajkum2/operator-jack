@@ -6,7 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-The M7-M15 roadmap in [`MASTER_PLAN.md`](MASTER_PLAN.md) is now COMPLETE (v0.16.0). Next: post-M15 hardening (close out the honestly-deferred items — exec seatbelt sandboxing, a Gatekeeper-passing signed build, watch user-activity-pause, an eval CI runner) and the MASTER_PLAN "Supersession & Future" backlog.
+The M7-M15 roadmap in [`MASTER_PLAN.md`](MASTER_PLAN.md) is COMPLETE (v0.16.0). Next: post-M15 hardening (exec seatbelt sandboxing, a Gatekeeper-passing signed build, watch user-activity-pause, an eval CI runner) and the MASTER_PLAN "Supersession & Future" backlog.
+
+## [0.17.0] - 2026-07-13
+
+### Added
+- **Local settings & control dashboard**: `operator-jack dashboard [--port 7311] [--no-open]` serves a
+  self-contained web UI on `127.0.0.1` to *view* status/runs/approvals/skills/capabilities and *edit* the
+  configuration (mode, providers, timeouts, retries, allow-lists, grants, budget) plus manage keychain
+  secrets — no hand-written TOML. New `crates/operator-cli/src/dashboard.rs` (+ embedded `dashboard.html`),
+  served with `tiny_http`; new `Store::set_busy_timeout` for safe concurrent access.
+- Security: loopback-only bind, a random per-session token on every `/api/*` call, `Host`-header validation
+  (DNS-rebinding defense), `application/json`-only POSTs, no CORS. API keys are never persisted to config
+  (env/keychain only); secret values are never returned by the API; config saves are atomic and load
+  without env-override contamination.
+
+### Note
+- Verified live: config save round-trips to TOML (mode/allow-lists/grants/budget), bad values rejected;
+  runs/approvals/skills read live; secrets set→list→delete against the keychain; auth + Host checks enforced.
+  169 Rust tests (3 new) + 10 Swift tests; fmt + clippy `-D warnings` clean; check-examples valid.
 
 ## [0.16.0] - 2026-07-09
 

@@ -104,6 +104,17 @@ impl Store {
         Ok(())
     }
 
+    /// Sets the SQLite busy timeout for this connection. A reader/writer (e.g.
+    /// the dashboard) that collides with a live run's write transaction will
+    /// wait up to `ms` for the lock instead of failing immediately with
+    /// `SQLITE_BUSY`. WAL already lets readers proceed without waiting; this
+    /// only matters for the dashboard's occasional writes (approve/deny/prune).
+    pub fn set_busy_timeout(&self, ms: u64) -> Result<(), StoreError> {
+        self.conn
+            .busy_timeout(std::time::Duration::from_millis(ms))?;
+        Ok(())
+    }
+
     // -----------------------------------------------------------------------
     // Plans CRUD
     // -----------------------------------------------------------------------

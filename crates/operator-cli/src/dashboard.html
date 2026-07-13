@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Operator Jack — Dashboard</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --panel:#ffffff; --ink:#1a1c1f; --muted:#5b6470; --line:#e3e6ea;
+    --accent:#2f6fed; --accent-ink:#fff; --ok:#1a8a4a; --warn:#b7791f; --bad:#c23b3b;
+    --chip:#eef1f6; --code:#f0f2f5;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#0f1113; --panel:#181b1f; --ink:#e7eaee; --muted:#98a2b0; --line:#2a2f36;
+      --accent:#5b8dff; --accent-ink:#0b0d10; --ok:#4cc47e; --warn:#e0a94a; --bad:#e46464; --chip:#22272e; --code:#12151a; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+  header{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5}
+  header h1{font-size:16px;margin:0;font-weight:650;letter-spacing:.2px}
+  header .ver{color:var(--muted);font-size:12px}
+  header .spacer{flex:1}
+  .pill{font-size:11px;padding:3px 8px;border-radius:999px;background:var(--chip);color:var(--muted)}
+  nav{display:flex;gap:2px;padding:8px 12px;flex-wrap:wrap;border-bottom:1px solid var(--line);background:var(--panel)}
+  nav button{border:0;background:transparent;color:var(--muted);padding:7px 13px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:550}
+  nav button.active{background:var(--accent);color:var(--accent-ink)}
+  nav button:hover:not(.active){background:var(--chip);color:var(--ink)}
+  main{max-width:980px;margin:0 auto;padding:20px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}
+  .card h2{margin:0 0 12px;font-size:14px;font-weight:650}
+  .row{display:flex;gap:14px;flex-wrap:wrap}
+  .kv{display:grid;grid-template-columns:190px 1fr;gap:6px 14px;align-items:baseline}
+  .kv .k{color:var(--muted)}
+  .kv .v{word-break:break-all}
+  code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
+  .mono-box{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:10px 12px;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+  label{display:block;margin:10px 0 4px;font-size:12.5px;color:var(--muted)}
+  input,select,textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit}
+  textarea{font-family:ui-monospace,Menlo,monospace;font-size:12px;min-height:70px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 16px}
+  button.btn{border:0;border-radius:8px;padding:8px 14px;font:inherit;font-weight:600;cursor:pointer;background:var(--accent);color:var(--accent-ink)}
+  button.btn.sec{background:var(--chip);color:var(--ink)}
+  button.btn.danger{background:transparent;color:var(--bad);border:1px solid var(--bad)}
+  button.btn.ok{background:var(--ok)}
+  button.btn:disabled{opacity:.5;cursor:default}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px}
+  tr.click{cursor:pointer}
+  tr.click:hover td{background:var(--chip)}
+  .tag{display:inline-block;font-size:11px;padding:2px 7px;border-radius:6px;background:var(--chip);color:var(--muted)}
+  .tag.ok{background:rgba(26,138,74,.14);color:var(--ok)}
+  .tag.bad{background:rgba(194,59,59,.14);color:var(--bad)}
+  .tag.warn{background:rgba(183,121,31,.16);color:var(--warn)}
+  .tag.low{background:rgba(26,138,74,.12);color:var(--ok)}
+  .tag.medium{background:rgba(183,121,31,.14);color:var(--warn)}
+  .tag.high{background:rgba(194,59,59,.14);color:var(--bad)}
+  .muted{color:var(--muted)}
+  .hint{color:var(--muted);font-size:12px;margin-top:6px}
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;max-width:80vw}
+  .toast.show{opacity:.95}
+  .toast.err{background:var(--bad);color:#fff}
+  .lanehdr{margin:18px 0 6px;font-weight:650;font-size:13px}
+  details{margin:8px 0}
+  summary{cursor:pointer;font-weight:600}
+  .flexbtns{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  .sub{font-size:12px;color:var(--muted);margin:-6px 0 12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Operator&nbsp;Jack</h1>
+  <span class="ver" id="ver">dashboard</span>
+  <span class="spacer"></span>
+  <span class="pill" id="modepill">—</span>
+</header>
+<nav id="tabs">
+  <button data-tab="status" class="active">Status</button>
+  <button data-tab="config">Configuration</button>
+  <button data-tab="runs">Runs</button>
+  <button data-tab="approvals">Approvals</button>
+  <button data-tab="secrets">Secrets</button>
+  <button data-tab="skills">Skills</button>
+  <button data-tab="caps">Capabilities</button>
+</nav>
+<main id="view"></main>
+<div class="toast" id="toast"></div>
+
+<script>
+const TOKEN = "__TOKEN__";
+const $ = (h)=>{const t=document.createElement('template');t.innerHTML=h.trim();return t.content.firstElementChild;};
+const el = (id)=>document.getElementById(id);
+function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function toast(msg,isErr){const t=el('toast');t.textContent=msg;t.className='toast show'+(isErr?' err':'');setTimeout(()=>t.className='toast',2600);}
+
+async function api(path, opts={}){
+  const o = Object.assign({headers:{}}, opts);
+  o.headers['X-Dashboard-Token']=TOKEN;
+  if(o.body){o.headers['Content-Type']='application/json';}
+  const r = await fetch('/api/'+path, o);
+  let data; try{data=await r.json();}catch(e){data={error:'bad response'};}
+  if(!r.ok){throw new Error(data.error||('HTTP '+r.status));}
+  return data;
+}
+
+// ---- tabs ----
+let current='status';
+el('tabs').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  [...el('tabs').children].forEach(x=>x.classList.toggle('active',x===b));
+  current=b.dataset.tab; render();
+});
+function render(){ ({status:renderStatus,config:renderConfig,runs:renderRuns,approvals:renderApprovals,secrets:renderSecrets,skills:renderSkills,caps:renderCaps}[current])(); }
+
+// ---- STATUS ----
+async function renderStatus(){
+  el('view').innerHTML='<div class="card"><h2>Environment</h2><div id="st">Loading…</div></div>'+
+    '<div class="card"><h2>Permissions &amp; providers</h2><p class="sub">On-demand — probes the macOS helper (never pops a dialog) and may take a moment.</p><button class="btn sec" id="permbtn">Check permissions</button><div id="perm" style="margin-top:12px"></div></div>';
+  try{
+    const s=await api('status');
+    el('ver').textContent='v'+s.version+' · dashboard';
+    const yn=(b)=>b?'<span class="tag ok">yes</span>':'<span class="tag bad">no</span>';
+    el('st').innerHTML='<div class="kv">'+
+      row('SQLite store', yn(s.sqlite_ok))+
+      row('Config file', esc(s.config_path)+' '+(s.config_exists?'<span class="tag ok">exists</span>':'<span class="tag warn">not created — run <code>init</code></span>'))+
+      row('Helper binary', s.helper_found?('<span class="tag ok">found</span> <span class="mono">'+esc(s.helper_path||'')+'</span>'):'<span class="tag bad">not found</span> <span class="muted">UI/AX steps need it</span>')+
+      row('Full Disk Access', yn(s.full_disk_access)+' <span class="muted">(needed for script.* on Mail/Messages)</span>')+
+      row('Data dir', '<span class="mono">'+esc(s.data_dir)+'</span>')+
+      row('Database', '<span class="mono">'+esc(s.db_path)+'</span>')+
+      row('Logs', '<span class="mono">'+esc(s.log_dir)+'</span>')+
+    '</div>';
+  }catch(e){el('st').innerHTML='<span class="tag bad">error</span> '+esc(e.message);}
+  el('permbtn').onclick=async()=>{
+    el('perm').innerHTML='Checking…'; el('permbtn').disabled=true;
+    try{
+      const p=await api('permissions');
+      const stat=(o,label)=>{
+        let g=(o&&(o.granted===true))?'ok':(o&&o.granted===false)?'bad':'warn';
+        let txt=(o&&o.granted===true)?'granted':(o&&o.granted===false)?'not granted':'unknown';
+        return row(label,'<span class="tag '+g+'">'+txt+'</span>');
+      };
+      let prov='';for(const k of ['kimi','openai','anthropic']){prov+=row('&nbsp;&nbsp;'+k+' API key', p.providers[k].api_key_set?'<span class="tag ok">set (env)</span>':'<span class="tag warn">not set</span>');}
+      prov+=row('&nbsp;&nbsp;ollama','<span class="muted">'+esc(p.providers.ollama.note)+'</span>');
+      el('perm').innerHTML='<div class="kv">'+
+        stat(p.accessibility,'Accessibility')+
+        stat(p.screen_recording,'Screen Recording')+
+        row('Full Disk Access', p.full_disk_access?'<span class="tag ok">granted</span>':'<span class="tag bad">not granted</span>')+
+        prov+'</div><p class="hint">'+esc(p.note)+'</p>';
+    }catch(e){el('perm').innerHTML='<span class="tag bad">error</span> '+esc(e.message);}
+    el('permbtn').disabled=false;
+  };
+}
+function row(k,v){return '<div class="k">'+k+'</div><div class="v">'+v+'</div>';}
+
+// ---- CONFIG ----
+let CFG=null, CFGPATH='';
+async function renderConfig(){
+  el('view').innerHTML='<div class="card"><h2>Configuration</h2><div id="cfg">Loading…</div></div>';
+  try{
+    const d=await api('config'); CFG=d.config; CFGPATH=d.path;
+    el('modepill').textContent='mode: '+(CFG.default_mode||'safe');
+    const p=CFG.planner||{}; const ps=(n)=>p[n]||{};
+    const num=(v)=>v==null?'':v;
+    el('cfg').innerHTML=
+      '<p class="sub"><span class="mono">'+esc(CFGPATH)+'</span></p>'+
+      '<div class="grid2">'+
+        field('Default mode','<select id="c_mode"><option '+(CFG.default_mode==="safe"?"selected":"")+'>safe</option><option '+(CFG.default_mode==="unsafe"?"selected":"")+'>unsafe</option></select>','safe confirms medium/high-risk steps; unsafe allows all')+
+        field('Default LLM provider','<select id="c_prov">'+['ollama','kimi','openai','anthropic'].map(x=>'<option '+(CFG.default_provider===x?"selected":"")+'>'+x+'</option>').join('')+'</select>','used by <code>do</code> / <code>agent</code>')+
+      '</div>'+
+      '<div class="grid3">'+
+        field('Step timeout (ms)','<input id="c_to" type="number" value="'+num(CFG.default_step_timeout_ms)+'">')+
+        field('Retries','<input id="c_re" type="number" value="'+num(CFG.default_retries)+'">')+
+        field('Retry backoff (ms)','<input id="c_bo" type="number" value="'+num(CFG.default_retry_backoff_ms)+'">')+
+      '</div>'+
+      '<div class="grid2">'+
+        field('Allowed apps (comma-sep, empty = all)','<input id="c_apps" value="'+esc((CFG.allow_apps||[]).join(', '))+'">')+
+        field('Allowed domains (comma-sep, empty = all)','<input id="c_doms" value="'+esc((CFG.allow_domains||[]).join(', '))+'">')+
+      '</div>'+
+      '<div class="grid2">'+
+        field('Helper path (optional)','<input id="c_hp" value="'+esc(CFG.helper_path||'')+'" placeholder="auto-detected if empty">')+
+        field('Log dir (optional)','<input id="c_ld" value="'+esc(CFG.log_dir||'')+'">')+
+      '</div>'+
+      '<details><summary>Per-provider LLM settings</summary>'+
+        ['ollama','kimi','openai','anthropic'].map(n=>{const s=ps(n);return '<div class="lanehdr">'+n+'</div><div class="grid3">'+
+          field('model','<input id="pm_'+n+'" value="'+esc(s.model||'')+'">')+
+          field('base_url','<input id="pu_'+n+'" value="'+esc(s.base_url||'')+'">')+
+          field('temperature','<input id="pt_'+n+'" value="'+esc(num(s.temperature))+'">')+
+        '</div>';}).join('')+
+        '<p class="hint">API keys are <b>never</b> stored here — set <code>KIMI_API_KEY</code>/<code>OPENAI_API_KEY</code>/<code>ANTHROPIC_API_KEY</code> in your environment (or use the Secrets tab for <code>{{secret:*}}</code> refs).</p>'+
+      '</details>'+
+      '<details><summary>Advanced: grants &amp; budget (raw JSON — leave blank for unrestricted)</summary>'+
+        field('grants','<textarea id="c_grants" placeholder=\'{"fs_write":["~/scraped/**"],"exec":["pip *"]}\'>'+esc(CFG.grants?JSON.stringify(CFG.grants,null,2):'')+'</textarea>','fs_read / fs_write / exec (globs) · domains — a present field restricts that capability')+
+        field('budget','<textarea id="c_budget" placeholder=\'{"max_steps":100,"max_wall_ms":600000}\'>'+esc(CFG.budget?JSON.stringify(CFG.budget,null,2):'')+'</textarea>','max_steps · max_wall_ms · max_bytes_written')+
+      '</details>'+
+      '<div class="flexbtns"><button class="btn" id="savebtn">Save configuration</button><button class="btn sec" id="reloadbtn">Reload</button></div>'+
+      '<p class="hint">Saving rewrites the TOML file (comments from <code>init</code> are not preserved). In-flight runs are unaffected.</p>';
+    el('savebtn').onclick=saveConfig; el('reloadbtn').onclick=renderConfig;
+  }catch(e){el('cfg').innerHTML='<span class="tag bad">error</span> '+esc(e.message);}
+}
+function field(label,inner,hint){return '<div><label>'+label+'</label>'+inner+(hint?'<div class="hint">'+hint+'</div>':'')+'</div>';}
+function parseList(s){return s.split(',').map(x=>x.trim()).filter(Boolean);}
+async function saveConfig(){
+  const c=JSON.parse(JSON.stringify(CFG)); // start from loaded, overlay edits
+  c.default_mode=el('c_mode').value;
+  c.default_provider=el('c_prov').value;
+  c.default_step_timeout_ms=Number(el('c_to').value)||0;
+  c.default_retries=Number(el('c_re').value)||0;
+  c.default_retry_backoff_ms=Number(el('c_bo').value)||0;
+  c.allow_apps=parseList(el('c_apps').value);
+  c.allow_domains=parseList(el('c_doms').value);
+  c.helper_path=el('c_hp').value.trim()||null;
+  c.log_dir=el('c_ld').value.trim()||null;
+  c.planner=c.planner||{};
+  for(const n of ['ollama','kimi','openai','anthropic']){
+    const o=Object.assign({}, c.planner[n]||{});
+    o.model=el('pm_'+n).value.trim()||null;
+    o.base_url=el('pu_'+n).value.trim()||null;
+    const t=el('pt_'+n).value.trim(); o.temperature=t===''?null:Number(t);
+    c.planner[n]=o;
+  }
+  try{
+    const g=el('c_grants').value.trim(); c.grants=g?JSON.parse(g):null;
+    const b=el('c_budget').value.trim(); c.budget=b?JSON.parse(b):null;
+  }catch(e){toast('grants/budget is not valid JSON',true);return;}
+  try{
+    const r=await api('config',{method:'POST',body:JSON.stringify({config:c})});
+    CFG=c; el('modepill').textContent='mode: '+c.default_mode;
+    toast('Saved '+r.path);
+  }catch(e){toast('Save failed: '+e.message,true);}
+}
+
+// ---- RUNS ----
+async function renderRuns(){
+  el('view').innerHTML='<div class="card"><h2>Recent runs</h2><div class="flexbtns" style="margin:0 0 12px"><button class="btn sec" id="pbtn">Prune old runs…</button></div><div id="runs">Loading…</div></div><div id="rundetail"></div>';
+  el('pbtn').onclick=async()=>{ if(!confirm('Delete runs older than 30 days (keeping the 20 newest)?'))return;
+    try{const r=await api('prune',{method:'POST',body:JSON.stringify({older_than_days:30,keep:20})});toast('Pruned '+r.pruned+' run(s)');renderRuns();}catch(e){toast(e.message,true);} };
+  try{
+    const d=await api('runs?limit=100');
+    if(!d.runs.length){el('runs').innerHTML='<p class="muted">No runs yet.</p>';return;}
+    let h='<table><thead><tr><th>Started</th><th>Status</th><th>Mode</th><th>Run ID</th></tr></thead><tbody>';
+    for(const r of d.runs){h+='<tr class="click" data-id="'+r.id+'"><td>'+esc(fmtTime(r.started_at))+'</td><td>'+statusTag(r.status)+'</td><td>'+esc(r.mode)+'</td><td class="mono">'+esc(r.id)+'</td></tr>';}
+    el('runs').innerHTML=h+'</tbody></table>';
+    el('runs').querySelectorAll('tr.click').forEach(tr=>tr.onclick=()=>showRun(tr.dataset.id));
+  }catch(e){el('runs').innerHTML='<span class="tag bad">error</span> '+esc(e.message);}
+}
+async function showRun(id){
+  const box=el('rundetail'); box.innerHTML='<div class="card">Loading run…</div>';
+  try{
+    const d=await api('runs/'+id);
+    let steps='<table><thead><tr><th>#</th><th>Step</th><th>Status</th><th>Output</th></tr></thead><tbody>';
+    for(const s of d.steps){steps+='<tr><td>'+s.step_index+'</td><td class="mono">'+esc(s.step_id)+'</td><td>'+statusTag(s.status)+'</td><td class="mono" style="max-width:360px;overflow:hidden">'+esc(JSON.stringify(s.output_json||s.error_json||'')).slice(0,240)+'</td></tr>';}
+    box.innerHTML='<div class="card"><h2>Run '+esc(id)+'</h2>'+
+      '<div class="kv">'+row('Status',statusTag(d.run.status))+row('Mode',esc(d.run.mode))+row('Started',esc(fmtTime(d.run.started_at)))+row('Ended',esc(d.run.ended_at?fmtTime(d.run.ended_at):'—'))+'</div>'+
+      '<div class="lanehdr">Steps ('+d.steps.length+')</div>'+steps+'</tbody></table>'+
+      (d.checkpoint?'<p class="hint">⏸ This run is checkpointed (paused). Approve it in the Approvals tab, then resume via the CLI.</p>':'')+
+      '</div>';
+  }catch(e){box.innerHTML='<div class="card"><span class="tag bad">error</span> '+esc(e.message)+'</div>';}
+}
+
+// ---- APPROVALS ----
+async function renderApprovals(){
+  el('view').innerHTML='<div class="card"><h2>Approvals <span class="muted">(paused runs awaiting a human)</span></h2><div id="apps">Loading…</div></div>';
+  try{
+    const d=await api('approvals');
+    if(!d.approvals.length){el('apps').innerHTML='<p class="muted">No pending approvals. A run pauses here on a high-consequence action or a human-takeover step.</p>';return;}
+    let h='';
+    for(const a of d.approvals){
+      h+='<div class="card" style="border-color:var(--warn)"><div class="kv">'+
+        row('Kind','<span class="tag warn">'+esc(a.kind)+'</span>')+
+        row('Reason',esc(a.summary))+
+        row('Run',' <span class="mono">'+esc(a.run_id)+'</span>')+
+      '</div><div class="flexbtns"><button class="btn ok" data-app="'+a.id+'" data-d="approved">Approve</button><button class="btn danger" data-app="'+a.id+'" data-d="denied">Deny</button></div><div class="resume" id="res_'+a.id+'"></div></div>';
+    }
+    el('apps').innerHTML=h;
+    el('apps').querySelectorAll('button[data-app]').forEach(b=>b.onclick=async()=>{
+      try{const r=await api('approvals/'+b.dataset.app+'/decide',{method:'POST',body:JSON.stringify({status:b.dataset.d})});
+        toast('Approval '+r.decided);
+        if(r.resume_command){el('res_'+b.dataset.app).innerHTML='<p class="hint">Approved. Resume the run from a terminal:</p><div class="mono-box">'+esc(r.resume_command)+'</div>';}
+        else{setTimeout(renderApprovals,700);}
+      }catch(e){toast(e.message,true);}
+    });
+  }catch(e){el('apps').innerHTML='<span class="tag bad">error</span> '+esc(e.message);}
+}
+
+// ---- SECRETS ----
+async function renderSecrets(){
+  el('view').innerHTML='<div class="card"><h2>Secrets <span class="muted">(macOS Keychain)</span></h2>'+
+    '<p class="sub">Reference any secret in a plan/skill param as <code>{{secret:name}}</code>. Values are never shown or logged.</p>'+
+    '<div class="grid3" style="align-items:end"><div><label>Name</label><input id="s_name" placeholder="openai_token"></div><div><label>Value</label><input id="s_val" type="password" placeholder="secret value"></div><div><button class="btn" id="s_add">Add / update</button></div></div>'+
+    '<div id="secs" style="margin-top:14px">Loading…</div></div>';
+  el('s_add').onclick=async()=>{
+    const name=el('s_name').value.trim(), value=el('s_val').value;
+    if(!name||!value){toast('name and value required',true);return;}
+    try{const r=await api('secrets',{method:'POST',body:JSON.stringify({name,value})});toast('Saved — reference as '+r.reference);el('s_name').value='';el('s_val').value='';renderSecrets();}catch(e){toast(e.message,true);}
+  };
+  try{
+    const d=await api('secrets');
+    if(!d.names.length){el('secs').innerHTML='<p class="muted">No secrets stored.</p>';return;}
+    let h='<table><thead><tr><th>Name</th><th>Reference</th><th></th></tr></thead><tbody>';
+    for(const n of d.names){h+='<tr><td class="mono">'+esc(n)+'</td><td class="mono">{{secret:'+esc(n)+'}}</td><td style="text-align:right"><button class="btn danger" data-sec="'+esc(n)+'">Remove</button></td></tr>';}
+    el('secs').innerHTML=h+'</tbody></table>';
+    el('secs').querySelectorAll('button[data-sec]').forEach(b=>b.onclick=async()=>{
+      if(!confirm('Remove secret "'+b.dataset.sec+'"?'))return;
+      try{await api('secrets/'+encodeURIComponent(b.dataset.sec)+'/delete',{method:'POST',body:'{}'});toast('Removed');renderSecrets();}catch(e){toast(e.message,true);}
+    });
+  }catch(e){el('secs').innerHTML='<span class="tag bad">error</span> '+esc(e.message);}
+}
+
+// ---- SKILLS ----
+async function renderSkills(){
+  el('view').innerHTML='<div class="card"><h2>Skills</h2><p class="sub">Reusable parameterized macros. Run with <code>operator-jack skill run &lt;name&gt; --param k=v</code>.</p><div id="sk">Loading…</div></div>';
+  try{
+    const d=await api('skills');
+    if(!d.skills.length){el('sk').innerHTML='<p class="muted">No skills discovered.</p>';return;}
+    let h='<table><thead><tr><th>Name</th><th>Description</th><th>Version</th></tr></thead><tbody>';
+    for(const s of d.skills){h+='<tr><td class="mono">'+esc(s.name)+'</td><td>'+esc(s.description||'')+'</td><td>'+esc(s.version||'')+'</td></tr>';}
+    el('sk').innerHTML=h+'</tbody></table>';
+  }catch(e){el('sk').innerHTML='<span class="tag bad">error</span> '+esc(e.message);}
+}
+
+// ---- CAPABILITIES (static reference) ----
+const CAPS={
+ "System lane (Rust, in-process)":[
+  ["sys.open_app","medium","Launch/activate an app"],["sys.open_url","medium","Open a URL"],
+  ["sys.read_file","low","Read a text file"],["sys.write_file","high","Write a file"],["sys.append_file","high","Append to a file"],
+  ["sys.mkdir","high","Create a directory"],["sys.move_path","high","Move/rename"],["sys.copy_path","high","Copy"],["sys.delete_path","high","Delete"],
+  ["sys.exec","high","Run a command (no shell)"],["sys.quit_app","medium","Quit an app"],
+  ["sys.clipboard_get","low","Read clipboard"],["sys.clipboard_set","medium","Set clipboard"],["sys.list_dir","low","List a directory (glob)"],
+  ["data.parse_csv","low","Parse CSV → rows"],["data.parse_json","low","Parse JSON (pointer)"],["http.request","medium","HTTP request (domain-gated)"],
+  ["script.applescript","high","Run AppleScript"],["script.jxa","high","Run JXA"],["shortcuts.run","high","Run a macOS Shortcut"]],
+ "UI lane (Swift helper, Accessibility)":[
+  ["ui.list_apps","low","List running apps"],["ui.focus_app","medium","Focus an app"],["ui.find","low","Find elements by selector"],
+  ["ui.click","medium","Click an element"],["ui.set_value","medium","Set a field value"],["ui.type_text","medium","Type text"],["ui.key_press","medium","Press a key"],
+  ["ui.read_text","low","Read element text"],["ui.wait_for","low","Wait for an element"],["ui.select_menu","medium","Select a menu item"],
+  ["ui.list_windows","low","List windows"],["ui.focus_window","medium","Focus a window"],["ui.snapshot","low","Compact AX tree + refs"],
+  ["ui.screenshot","low","Screenshot (Screen Recording)"],["ui.scroll","medium","Scroll"],["doc.pdf_text","low","PDF → text (PDFKit)"],["doc.ocr","low","OCR (Vision)"]],
+ "Browser lane (isolated Chrome, CDP)":[
+  ["browser.navigate","medium","Open a URL"],["browser.click","medium","Click (CSS)"],["browser.type","medium","Type (CSS)"],
+  ["browser.get_text","medium","Text of first match"],["browser.get_text_all","medium","Text of all matches"],
+  ["browser.get_attribute","medium","Attribute of first"],["browser.get_attributes_all","medium","Attribute of all"],
+  ["browser.execute_js","high","Run page JS"],["browser.screenshot","low","Page screenshot"],["browser.wait_for","medium","Wait for CSS"],
+  ["browser.scroll","medium","Scroll page"],["browser.snapshot","low","Page elements + refs"],["browser.download","medium","Download a file"]],
+ "Control lane (deterministic flow)":[
+  ["control.foreach","low","Loop over a collection"],["control.if","low","Conditional branch"],
+  ["control.repeat_until","low","Loop until a condition"],["ui.human_takeover","low","Pause for the human"]],
+};
+function renderCaps(){
+  let h='<div class="card"><h2>Capabilities — 55 step types across 4 lanes</h2><p class="sub">Every step passes the policy gate: risk (safe-mode confirmation), grants, the always-escalate classifier, and audit. Risk tags below.</p>';
+  for(const [lane,items] of Object.entries(CAPS)){
+    h+='<div class="lanehdr">'+lane+'</div><table><tbody>';
+    for(const [name,risk,desc] of items){h+='<tr><td class="mono" style="width:210px">'+name+'</td><td style="width:80px"><span class="tag '+risk+'">'+risk+'</span></td><td>'+desc+'</td></tr>';}
+    h+='</tbody></table>';
+  }
+  h+='</div><div class="card"><h2>Interfaces</h2><div class="kv">'+
+    row('Plans','JSON step lists — <code>operator-jack run --plan-file x.json</code>')+
+    row('Natural language','<code>operator-jack do "..."</code> (LLM planner)')+
+    row('Autonomous agent','<code>operator-jack agent "goal"</code> (observe→act loop)')+
+    row('MCP server','<code>operator-jack mcp serve</code> — 27 gated tools over stdio')+
+    row('Skills','<code>operator-jack skill run &lt;name&gt;</code>')+
+    row('Unattended','<code>operator-jack watch</code> · reversible with <code>operator-jack undo</code>')+
+  '</div></div>';
+  el('view').innerHTML=h;
+}
+
+function statusTag(s){const m={succeeded:'ok',completed_with_errors:'warn',failed:'bad',cancelled:'warn',partial:'warn',paused:'warn',running:'',queued:''};return '<span class="tag '+(m[s]||'')+'">'+esc(s)+'</span>';}
+function fmtTime(t){try{return new Date(t).toLocaleString();}catch(e){return t;}}
+
+render();
+</script>
+</body>
+</html>
