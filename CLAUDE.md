@@ -313,6 +313,18 @@ operator-jack undo <run-id>                       # Reverse a run's filesystem m
 operator-jack watch --plan-file <p> [--interval N] [--path <watch>] [--install-launchd]
 operator-jack eval <suite-dir> [--json]           # Run every *.json plan in a suite, score pass/fail
 ```
+
+### Dashboard (v0.17.0)
+```
+operator-jack dashboard [--port 7311] [--no-open]  # Local web UI on 127.0.0.1 to view + edit everything
+```
+A self-contained web dashboard (`crates/operator-cli/src/dashboard.rs` + embedded `dashboard.html`,
+served with `tiny_http`) to *see* status/runs/approvals/skills/capabilities and *edit* the config
+(mode, providers, timeouts, allow-lists, grants, budget) + manage keychain secrets — without hand-writing
+TOML. Locked down: binds `127.0.0.1` only, a random per-session token gates every `/api/*` call, the
+`Host` header is validated (DNS-rebinding defense), POSTs must be `application/json`, no CORS. API keys are
+never written to config (env/keychain only); secret values are never returned. Config edits load via
+`load_from` (no env-override contamination) and are written atomically.
 **Undo journal (reversibility):** for every real (non-dry-run) run the CLI sets `EngineConfig.undo_dir`
 to `<data_dir>/undo`, and the engine snapshots prior state before each mutating `sys.*` filesystem step
 (backup target or record newly-created for `write_file`/`append_file`/`copy_path`, copy-aside for

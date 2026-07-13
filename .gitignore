@@ -5,12 +5,14 @@ macos-helper/.build/
 # macOS
 .DS_Store
 Library/
+temp_auto_push.bat
 
 # IDE
 .idea/
-.vscode/
 *.swp
 *.swo
 
 # Environment
 .env
+.gitignore
+branch_structure.json
