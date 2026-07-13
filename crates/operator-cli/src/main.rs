@@ -5,6 +5,8 @@
 //! coordinate between `operator-core`, `operator-store`, and
 //! `operator-runtime`.
 
+mod dashboard;
+
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -111,6 +113,10 @@ enum Commands {
 
         /// Inline instruction or json:{...}
         instruction: Option<String>,
+
+        /// Resume a paused plan run by its run-id (skips completed steps)
+        #[arg(long)]
+        resume: Option<String>,
     },
 
     /// Execute a natural language instruction
@@ -139,10 +145,79 @@ enum Commands {
         /// Show full JSONL log
         #[arg(long)]
         full: bool,
+
+        /// Follow the run's event log live (tail -f), like `logs --follow <run-id>`
+        #[arg(long)]
+        follow: bool,
+
+        /// Prune old runs from the store instead of viewing (retention)
+        #[arg(long)]
+        prune: bool,
+
+        /// With --prune: delete runs older than this many days (default 30)
+        #[arg(long, default_value = "30")]
+        older_than_days: i64,
+
+        /// With --prune: always keep at least this many most-recent runs (default 20)
+        #[arg(long, default_value = "20")]
+        keep: usize,
     },
 
     /// Stop a running execution
     Stop,
+
+    /// Reverse a run's filesystem mutations from its undo journal (M15)
+    Undo {
+        /// The run-id to undo (from `logs` or the run summary)
+        run_id: String,
+    },
+
+    /// Watch for a trigger and fire a plan unattended (M15). Runs are serialized
+    /// by a single-instance mutex; a trigger during a run is queued, not dropped.
+    Watch {
+        /// Plan file to run on each trigger
+        #[arg(long)]
+        plan_file: std::path::PathBuf,
+        /// Poll interval in seconds (also the file-change poll cadence)
+        #[arg(long, default_value = "60")]
+        interval: u64,
+        /// Optional path to watch; fire only when its mtime changes
+        #[arg(long)]
+        path: Option<std::path::PathBuf>,
+        /// Write a launchd plist to run this watch at login, then exit
+        #[arg(long)]
+        install_launchd: bool,
+    },
+
+    /// Run an eval suite (a dir of plan files) and report a pass rate (M15)
+    Eval {
+        /// Directory of `*.json` plan files to run
+        suite: std::path::PathBuf,
+    },
+
+    /// Launch the local settings & control dashboard (a web UI on 127.0.0.1)
+    Dashboard {
+        /// Port to bind on 127.0.0.1
+        #[arg(long, default_value = "7311")]
+        port: u16,
+        /// Do not auto-open the browser
+        #[arg(long)]
+        no_open: bool,
+    },
+
+    /// Manage pending approvals for paused runs (M11)
+    Approvals {
+        #[command(subcommand)]
+        action: ApprovalsAction,
+    },
+
+    /// Inject a steering message into a running agent (M11)
+    Steer {
+        /// The run-id of the agent to steer
+        run_id: String,
+        /// The guidance to inject at the agent's next turn
+        message: String,
+    },
 
     /// UI automation utilities
     Ui {
@@ -163,6 +238,87 @@ enum Commands {
     Browser {
         #[command(subcommand)]
         action: BrowserAction,
+    },
+
+    /// Manage keychain secrets referenced in plans as `{{secret:name}}` (M8)
+    Secret {
+        #[command(subcommand)]
+        action: SecretAction,
+    },
+
+    /// MCP server mode (M9) — expose gated executors as MCP tools over stdio
+    Mcp {
+        #[command(subcommand)]
+        action: McpAction,
+    },
+
+    /// Autonomous agent (M10) — pursue a goal by observe→act→re-observe with an LLM
+    Agent {
+        /// The goal, e.g. "open Calculator and compute 2 + 3"
+        #[arg(default_value = "")]
+        instruction: String,
+        /// Maximum observe→act iterations
+        #[arg(long, default_value = "15")]
+        max_iters: usize,
+        /// LLM provider (kimi | openai | anthropic | ollama)
+        #[arg(long)]
+        provider: Option<String>,
+        /// Path to a JSON grants file bounding the session
+        #[arg(long)]
+        grants: Option<std::path::PathBuf>,
+        /// Resume a paused agent run by its run-id (after approving its request)
+        #[arg(long)]
+        resume: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ApprovalsAction {
+    /// List approvals (pending by default; --all for every status)
+    List {
+        /// Show approvals of every status, not just pending
+        #[arg(long)]
+        all: bool,
+    },
+    /// Approve a pending request (allows the escalating action once on resume)
+    Approve {
+        /// Approval id (from `approvals list`)
+        id: String,
+    },
+    /// Deny a pending request
+    Deny {
+        /// Approval id (from `approvals list`)
+        id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum McpAction {
+    /// Serve the MCP protocol on stdio (connect an MCP client to this process).
+    Serve {
+        /// Path to a JSON file with the session's grants envelope
+        /// (e.g. {"fs_write":["~/scraped/**"],"exec":["pip install *"]}).
+        #[arg(long)]
+        grants: Option<std::path::PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum SecretAction {
+    /// Store (or update) a secret. The value is read from stdin (or --value).
+    Set {
+        /// Secret name (referenced in plans as `{{secret:name}}`).
+        name: String,
+        /// Value (omit to read from stdin, which avoids shell history).
+        #[arg(long)]
+        value: Option<String>,
+    },
+    /// List stored secret names (never their values).
+    List,
+    /// Remove a secret.
+    Rm {
+        /// Secret name.
+        name: String,
     },
 }
 
@@ -296,7 +452,14 @@ fn main() -> Result<()> {
         Commands::Run {
             ref plan_file,
             ref instruction,
-        } => cmd_run(&cli, plan_file.clone(), instruction.clone()),
+            ref resume,
+        } => {
+            if let Some(run_id) = resume {
+                cmd_run_resume(&cli, run_id)
+            } else {
+                cmd_run(&cli, plan_file.clone(), instruction.clone())
+            }
+        }
         Commands::Do {
             ref instruction,
             ref provider,
@@ -309,8 +472,55 @@ fn main() -> Result<()> {
             *show_plan,
             save_plan.clone(),
         ),
-        Commands::Logs { ref run_id, full } => cmd_logs(&cli, run_id.clone(), *full),
+        Commands::Logs {
+            ref run_id,
+            full,
+            follow,
+            prune,
+            older_than_days,
+            keep,
+        } => {
+            // Accept `logs prune` / `logs follow` as verbs (first positional), in
+            // addition to the `--prune` / `--follow` flags.
+            let verb = run_id.as_deref();
+            if *prune || verb == Some("prune") {
+                cmd_logs_prune(&cli, *older_than_days, *keep)
+            } else if verb == Some("follow") {
+                cmd_logs_follow(&cli, None)
+            } else if *follow {
+                cmd_logs_follow(&cli, run_id.clone())
+            } else {
+                cmd_logs(&cli, run_id.clone(), *full)
+            }
+        }
         Commands::Stop => cmd_stop(&cli),
+        Commands::Undo { ref run_id } => cmd_undo(&cli, run_id),
+        Commands::Watch {
+            ref plan_file,
+            interval,
+            ref path,
+            install_launchd,
+        } => cmd_watch(
+            &cli,
+            plan_file,
+            *interval,
+            path.as_deref(),
+            *install_launchd,
+        ),
+        Commands::Eval { ref suite } => cmd_eval(&cli, suite),
+        Commands::Dashboard { port, no_open } => {
+            let helper = resolve_helper_path(&cli).map(|p| p.to_string_lossy().to_string());
+            dashboard::serve(*port, *no_open, helper)
+        }
+        Commands::Approvals { ref action } => match action {
+            ApprovalsAction::List { all } => cmd_approvals_list(&cli, *all),
+            ApprovalsAction::Approve { id } => cmd_approvals_decide(&cli, id, true),
+            ApprovalsAction::Deny { id } => cmd_approvals_decide(&cli, id, false),
+        },
+        Commands::Steer {
+            ref run_id,
+            ref message,
+        } => cmd_steer(&cli, run_id, message),
         Commands::Ui { ref action } => match action {
             UiAction::Inspect { ref app, depth } => cmd_ui_inspect(&cli, app, *depth),
         },
@@ -327,11 +537,740 @@ fn main() -> Result<()> {
             BrowserAction::Doctor => cmd_browser_doctor(&cli),
             BrowserAction::Launch { port } => cmd_browser_launch(&cli, *port),
             BrowserAction::Navigate { url, port } => cmd_browser_navigate(&cli, url, *port),
-            BrowserAction::Screenshot { output, full_page, port } => {
-                cmd_browser_screenshot(&cli, output, *full_page, *port)
-            }
+            BrowserAction::Screenshot {
+                output,
+                full_page,
+                port,
+            } => cmd_browser_screenshot(&cli, output, *full_page, *port),
         },
+        Commands::Secret { ref action } => match action {
+            SecretAction::Set { name, value } => cmd_secret_set(&cli, name, value.as_deref()),
+            SecretAction::List => cmd_secret_list(&cli),
+            SecretAction::Rm { name } => cmd_secret_rm(&cli, name),
+        },
+        Commands::Mcp { ref action } => match action {
+            McpAction::Serve { grants } => cmd_mcp_serve(&cli, grants.as_deref()),
+        },
+        Commands::Agent {
+            ref instruction,
+            max_iters,
+            ref provider,
+            ref grants,
+            ref resume,
+        } => cmd_agent(
+            &cli,
+            instruction,
+            *max_iters,
+            provider.clone(),
+            grants.as_deref(),
+            resume.as_deref(),
+        ),
     }
+}
+
+// ---------------------------------------------------------------------------
+// cmd_agent — autonomous agent loop (M10)
+// ---------------------------------------------------------------------------
+
+/// Runs the native agent loop: an LLM proposes one action at a time, each
+/// executed through a gated `RunSession`, observing results until done or the
+/// iteration budget is hit. Like MCP mode, it auto-approves confirmations and
+/// relies on the grant envelope + escalation classifier for safety.
+#[allow(clippy::too_many_arguments)]
+fn cmd_agent(
+    cli: &Cli,
+    instruction: &str,
+    max_iters: usize,
+    provider_override: Option<String>,
+    grants_file: Option<&Path>,
+    resume: Option<&str>,
+) -> Result<()> {
+    if let Some(run_id) = resume {
+        return cmd_agent_resume(cli, run_id, max_iters, provider_override);
+    }
+
+    use operator_core::grants::Grants;
+    use operator_planner::{Planner, ProviderType};
+
+    if instruction.trim().is_empty() {
+        eprintln!(
+            "Error: provide a goal, e.g. operator-jack agent \"open Calculator and compute 2 + 3\""
+        );
+        std::process::exit(6);
+    }
+
+    let cfg = OperatorConfig::load().unwrap_or_default();
+    let planner = Planner::new(build_planner_config(&cfg));
+
+    // Resolve provider: explicit override, else first available, else Ollama.
+    let provider_type = match provider_override {
+        Some(p) => p
+            .parse::<ProviderType>()
+            .map_err(|e| anyhow::anyhow!("{e}"))?,
+        None => planner
+            .first_available_provider()
+            .unwrap_or(ProviderType::Ollama),
+    };
+    let provider = planner
+        .create_provider(provider_type)
+        .map_err(|e| anyhow::anyhow!("failed to initialize provider: {e}"))?;
+
+    // Autonomous, non-interactive posture (same as MCP): safety via grants +
+    // escalation classifier, not per-step confirmation.
+    let mut config = build_engine_config(cli)?;
+    config.yes_to_all = true;
+    config.interactive = false;
+
+    let session_grants: Option<Grants> = if let Some(path) = grants_file {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read grants file {}", path.display()))?;
+        Some(serde_json::from_str(&text).with_context(|| "failed to parse grants file")?)
+    } else {
+        config.grants.take()
+    };
+    config.grants = None;
+
+    eprintln!("operator-jack agent — goal: {instruction}");
+    eprintln!("Provider: {}", provider_type.display_name());
+    print_grant_preview(session_grants.as_ref());
+
+    let store = open_store()?;
+    let session = operator_runtime::engine::RunSession::open(store, config, session_grants, None)
+        .map_err(|e| anyhow::anyhow!("failed to open agent session: {e}"))?;
+
+    drive_agent(
+        cli,
+        provider.as_ref(),
+        session,
+        instruction,
+        max_iters,
+        Vec::new(),
+    )
+}
+
+/// Resumes a paused agent run: verifies its approval was granted, re-opens a
+/// session under the same grant envelope (with a one-shot escalation allowance
+/// if the pause was an escalation), re-seeds the model with the saved
+/// transcript, and continues the loop.
+fn cmd_agent_resume(
+    cli: &Cli,
+    run_id: &str,
+    max_iters: usize,
+    provider_override: Option<String>,
+) -> Result<()> {
+    use operator_core::types::{ApprovalKind, ApprovalStatus, CheckpointKind};
+    use operator_planner::{Planner, ProviderType};
+
+    let store = open_store()?;
+    let cp = store
+        .load_checkpoint(run_id)
+        .context("failed to read checkpoint")?
+        .ok_or_else(|| {
+            anyhow::anyhow!("no paused run with id {run_id} (no checkpoint on record)")
+        })?;
+    if cp.kind != CheckpointKind::Agent {
+        bail!("run {run_id} is a plan run — resume it with `operator-jack run --resume {run_id}`");
+    }
+
+    // Gate on the approval decision.
+    let approval = store
+        .latest_approval_for_run(run_id)
+        .context("failed to read approvals")?
+        .ok_or_else(|| anyhow::anyhow!("no approval on record for run {run_id}"))?;
+    match approval.status {
+        ApprovalStatus::Pending => bail!(
+            "run {run_id} is still awaiting approval — run `operator-jack approvals approve {}` first",
+            approval.id
+        ),
+        ApprovalStatus::Denied => bail!("the approval for run {run_id} was denied; not resuming"),
+        ApprovalStatus::Approved => {}
+    }
+
+    // Rebuild the session envelope from the paused run's plan row.
+    let old_run = store.get_run(run_id).context("failed to load paused run")?;
+    let (_pid, old_plan) = store
+        .get_plan(&old_run.plan_id)
+        .context("failed to load paused run's plan")?;
+
+    let cfg = OperatorConfig::load().unwrap_or_default();
+    let planner = Planner::new(build_planner_config(&cfg));
+    let provider_type = match provider_override {
+        Some(p) => p
+            .parse::<ProviderType>()
+            .map_err(|e| anyhow::anyhow!("{e}"))?,
+        None => planner
+            .first_available_provider()
+            .unwrap_or(ProviderType::Ollama),
+    };
+    let provider = planner
+        .create_provider(provider_type)
+        .map_err(|e| anyhow::anyhow!("failed to initialize provider: {e}"))?;
+
+    let mut config = build_engine_config(cli)?;
+    config.yes_to_all = true;
+    config.interactive = false;
+    if let Some(mode) = old_plan.mode.clone() {
+        config.mode = mode;
+    }
+    config.grants = None;
+
+    let goal = cp.goal.clone().unwrap_or_default();
+    let transcript = cp.transcript.clone().unwrap_or_default();
+
+    eprintln!("operator-jack agent — resuming run {run_id}");
+    eprintln!("Provider: {}", provider_type.display_name());
+    print_grant_preview(old_plan.grants.as_ref());
+
+    let store2 = open_store()?;
+    let session =
+        operator_runtime::engine::RunSession::open(store2, config, old_plan.grants.clone(), None)
+            .map_err(|e| anyhow::anyhow!("failed to open resume session: {e}"))?;
+
+    // A one-shot escalation allowance so the approved action goes through once.
+    if approval.kind == ApprovalKind::Escalation {
+        session.grant_one_escalation();
+    }
+
+    // Consume the checkpoint so the same pause can't be resumed twice.
+    let _ = store.delete_checkpoint(run_id);
+
+    drive_agent(
+        cli,
+        provider.as_ref(),
+        session,
+        &goal,
+        max_iters,
+        transcript,
+    )
+}
+
+/// Shared agent driver used by both fresh runs and resumes: writes the PID file,
+/// runs the supervised loop, and either abandons (if paused) or finishes the
+/// session, then prints the outcome.
+fn drive_agent(
+    cli: &Cli,
+    provider: &dyn operator_planner::provider::LlmProvider,
+    mut session: operator_runtime::engine::RunSession,
+    goal: &str,
+    max_iters: usize,
+    initial_transcript: Vec<String>,
+) -> Result<()> {
+    use operator_agent::AgentStatus;
+
+    let run_id = session.run_id().to_string();
+    let data_dir = resolve_data_dir();
+    let _ = write_pid_file(&data_dir, &run_id);
+
+    let mut supervisor = CliSupervisor::new(resolve_log_dir());
+    let outcome = operator_agent::run_agent_supervised(
+        goal,
+        provider,
+        &mut session,
+        max_iters,
+        &mut supervisor,
+        initial_transcript,
+    );
+
+    // On pause the supervisor has already set status=Paused and checkpointed;
+    // don't overwrite it with a terminal status.
+    let paused = outcome.status == AgentStatus::Paused;
+    let steps_total = if paused {
+        session.abandon();
+        0
+    } else {
+        session.finish().steps_total
+    };
+    let _ = remove_pid_file(&data_dir);
+
+    if cli.json {
+        let obj = serde_json::json!({
+            "run_id": run_id,
+            "status": format!("{:?}", outcome.status),
+            "iterations": outcome.iterations,
+            "summary": outcome.summary,
+            "steps": steps_total,
+        });
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+    } else {
+        println!();
+        println!("Agent finished: {:?}", outcome.status);
+        println!("  Iterations: {}", outcome.iterations);
+        println!("  Summary:    {}", outcome.summary);
+        println!("  Run:        {run_id}");
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// CliSupervisor — store-backed AgentSupervisor (M11)
+// ---------------------------------------------------------------------------
+
+/// The CLI's implementation of the agent supervisor: persists pause checkpoints
+/// and approvals to the store, drains steer messages from a per-run file, and
+/// raises a macOS notification on pause.
+struct CliSupervisor {
+    store: Store,
+    log_dir: PathBuf,
+}
+
+impl CliSupervisor {
+    fn new(log_dir: PathBuf) -> Self {
+        // A dedicated store connection (the session owns its own); both point at
+        // the same WAL database.
+        let store = open_store().expect("failed to open supervisor store");
+        Self { store, log_dir }
+    }
+
+    fn steer_path(&self, run_id: &str) -> PathBuf {
+        self.log_dir.join(format!("{run_id}.steer"))
+    }
+}
+
+impl operator_agent::AgentSupervisor for CliSupervisor {
+    fn pause(
+        &mut self,
+        run_id: &str,
+        kind: operator_agent::PauseKind,
+        cp: &operator_agent::AgentCheckpoint,
+    ) -> String {
+        use operator_core::types::{ApprovalKind, Checkpoint, CheckpointKind};
+
+        let plan_id = self
+            .store
+            .get_run(run_id)
+            .map(|r| r.plan_id)
+            .unwrap_or_default();
+        let checkpoint = Checkpoint {
+            run_id: run_id.to_string(),
+            plan_id,
+            kind: CheckpointKind::Agent,
+            cursor: serde_json::json!({ "iteration": cp.iteration }),
+            variables: None,
+            transcript: Some(cp.transcript.to_vec()),
+            goal: Some(cp.goal.to_string()),
+            reason: cp.reason.to_string(),
+        };
+        let _ = self.store.save_checkpoint(&checkpoint);
+        let akind = match kind {
+            operator_agent::PauseKind::Escalation => ApprovalKind::Escalation,
+            operator_agent::PauseKind::Takeover => ApprovalKind::Takeover,
+        };
+        let id = self
+            .store
+            .create_approval(run_id, akind, cp.reason)
+            .unwrap_or_default();
+        let _ = self
+            .store
+            .update_run_status(run_id, &RunStatus::Paused, None);
+        id
+    }
+
+    fn poll_steer(&mut self, run_id: &str) -> Vec<String> {
+        let path = self.steer_path(run_id);
+        let Ok(contents) = fs::read_to_string(&path) else {
+            return Vec::new();
+        };
+        if contents.trim().is_empty() {
+            return Vec::new();
+        }
+        // Drain: truncate the file so each message is injected exactly once.
+        let _ = fs::write(&path, "");
+        contents
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn notify(&self, title: &str, body: &str) {
+        notify_user(title, body);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Approvals + steering + retention (M11)
+// ---------------------------------------------------------------------------
+
+/// Lists approvals (pending by default; `--all` for every status).
+fn cmd_approvals_list(cli: &Cli, all: bool) -> Result<()> {
+    use operator_core::types::ApprovalStatus;
+
+    let store = open_store()?;
+    let filter = if all {
+        None
+    } else {
+        Some(ApprovalStatus::Pending)
+    };
+    let approvals = store
+        .list_approvals(filter)
+        .context("failed to list approvals")?;
+
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(&approvals)?);
+        return Ok(());
+    }
+
+    if approvals.is_empty() {
+        println!("No {} approvals.", if all { "recorded" } else { "pending" });
+        return Ok(());
+    }
+
+    println!(
+        "{:<28}  {:<10}  {:<10}  REASON",
+        "APPROVAL ID", "KIND", "STATUS"
+    );
+    for a in &approvals {
+        println!(
+            "{:<28}  {:<10}  {:<10}  {}",
+            a.id,
+            format!("{:?}", a.kind).to_lowercase(),
+            format!("{:?}", a.status).to_lowercase(),
+            truncate_str(&a.summary, 60),
+        );
+    }
+    println!();
+    println!("Approve with:  operator-jack approvals approve <id>");
+    println!("Then resume:   operator-jack agent --resume <run-id>   (run-id shown in the pause message)");
+    Ok(())
+}
+
+/// Approves or denies a pending approval.
+fn cmd_approvals_decide(cli: &Cli, id: &str, approve: bool) -> Result<()> {
+    use operator_core::types::ApprovalStatus;
+
+    let store = open_store()?;
+    let existing = store
+        .get_approval(id)
+        .context("failed to read approval")?
+        .ok_or_else(|| anyhow::anyhow!("no approval with id {id}"))?;
+    if existing.status != ApprovalStatus::Pending {
+        bail!(
+            "approval {id} is already {:?} — nothing to do",
+            existing.status
+        );
+    }
+
+    let new_status = if approve {
+        ApprovalStatus::Approved
+    } else {
+        ApprovalStatus::Denied
+    };
+    store
+        .decide_approval(id, new_status)
+        .context("failed to update approval")?;
+
+    if cli.json {
+        let obj = serde_json::json!({
+            "id": id,
+            "run_id": existing.run_id,
+            "status": if approve { "approved" } else { "denied" },
+        });
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+    } else if approve {
+        println!("Approved {id}.");
+        println!(
+            "Resume the run with:  operator-jack agent --resume {}",
+            existing.run_id
+        );
+    } else {
+        println!("Denied {id}. The paused run will not resume.");
+    }
+    Ok(())
+}
+
+/// Injects a steering message into a running agent: appends to a per-run file
+/// the agent drains at the start of its next turn.
+fn cmd_steer(cli: &Cli, run_id: &str, message: &str) -> Result<()> {
+    use std::io::Write as _;
+
+    let path = resolve_log_dir().join(format!("{run_id}.steer"));
+    let mut f = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("failed to open steer file {}", path.display()))?;
+    writeln!(f, "{}", message.replace('\n', " "))
+        .with_context(|| "failed to write steer message")?;
+
+    if cli.json {
+        println!(
+            "{}",
+            serde_json::json!({ "run_id": run_id, "queued": message })
+        );
+    } else {
+        println!("Steering message queued for run {run_id}; it will be injected at the next turn.");
+    }
+    Ok(())
+}
+
+/// Prunes old runs from the store (retention). Deletes runs older than
+/// `older_than_days`, always keeping at least `keep` of the most recent.
+fn cmd_logs_prune(cli: &Cli, older_than_days: i64, keep: usize) -> Result<()> {
+    let store = open_store()?;
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(older_than_days.max(0));
+    let pruned = store
+        .prune_runs(cutoff, keep)
+        .context("failed to prune runs")?;
+
+    if cli.json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "pruned": pruned,
+                "older_than_days": older_than_days,
+                "kept_min": keep,
+            })
+        );
+    } else {
+        println!(
+            "Pruned {pruned} run(s) older than {older_than_days} day(s) (kept the {keep} most recent)."
+        );
+    }
+    Ok(())
+}
+
+/// Follows a run's event log live (tail -f). Resolves the newest run if no id is
+/// given, prints existing lines, then polls for new ones until interrupted or
+/// the run reaches a terminal status.
+fn cmd_logs_follow(_cli: &Cli, run_id: Option<String>) -> Result<()> {
+    let log_dir = resolve_log_dir();
+    let store = open_store()?;
+
+    let rid = match run_id {
+        Some(r) => r,
+        None => store
+            .list_runs(1)
+            .ok()
+            .and_then(|runs| runs.into_iter().next())
+            .map(|r| r.id)
+            .ok_or_else(|| anyhow::anyhow!("no runs found to follow"))?,
+    };
+    let log_path = log_dir.join(format!("{rid}.jsonl"));
+
+    // Trap Ctrl-C so following stops cleanly.
+    let stop = Arc::new(AtomicBool::new(false));
+    let _ = set_ctrlc_handler(Arc::clone(&stop));
+
+    eprintln!("Following run {rid} (Ctrl-C to stop)…");
+    let mut pos: u64 = 0;
+    let mut missing_ticks = 0;
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        match fs::File::open(&log_path) {
+            Ok(mut f) => {
+                use std::io::{Read, Seek, SeekFrom};
+                let _ = f.seek(SeekFrom::Start(pos));
+                let mut buf = String::new();
+                if f.read_to_string(&mut buf).is_ok() && !buf.is_empty() {
+                    pos += buf.len() as u64;
+                    for line in buf.lines() {
+                        print_log_event_line(line);
+                    }
+                }
+            }
+            Err(_) => {
+                missing_ticks += 1;
+                if missing_ticks > 20 {
+                    eprintln!("(no log file for run {rid} yet: {})", log_path.display());
+                    missing_ticks = 0;
+                }
+            }
+        }
+        // Stop once the run is terminal and we've drained the file.
+        if let Ok(run) = store.get_run(&rid) {
+            if is_terminal_status(&run.status) {
+                // One last drain already happened above.
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(400));
+    }
+    Ok(())
+}
+
+/// True if a run status is terminal (won't produce more events).
+fn is_terminal_status(status: &RunStatus) -> bool {
+    matches!(
+        status,
+        RunStatus::Succeeded
+            | RunStatus::CompletedWithErrors
+            | RunStatus::Failed
+            | RunStatus::Cancelled
+            | RunStatus::Partial
+    )
+}
+
+/// Pretty-prints one JSONL event line for `logs --follow`.
+fn print_log_event_line(line: &str) {
+    let line = line.trim();
+    if line.is_empty() {
+        return;
+    }
+    match serde_json::from_str::<serde_json::Value>(line) {
+        Ok(v) => {
+            let ts = v.get("ts").and_then(|t| t.as_str()).unwrap_or("");
+            let etype = v
+                .get("event_type")
+                .and_then(|t| t.as_str())
+                .unwrap_or("event");
+            let payload = v
+                .get("payload_json")
+                .or_else(|| v.get("payload"))
+                .map(|p| p.to_string())
+                .unwrap_or_default();
+            println!("{ts}  {etype}  {}", truncate_str(&payload, 120));
+        }
+        Err(_) => println!("{line}"),
+    }
+}
+
+/// Raises a macOS notification via `osascript` (best-effort; ignored on failure
+/// or non-macOS).
+fn notify_user(title: &str, body: &str) {
+    // Escape double quotes for the AppleScript string literals.
+    let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+    let script = format!(
+        "display notification \"{}\" with title \"{}\"",
+        esc(body),
+        esc(title)
+    );
+    let _ = Command::new("osascript").arg("-e").arg(script).output();
+}
+
+// ---------------------------------------------------------------------------
+// cmd_mcp_serve — MCP server over stdio (M9)
+// ---------------------------------------------------------------------------
+
+/// Serves the MCP protocol on stdio. An MCP client drives Operator Jack's
+/// executors as tools; every tool call runs through a `RunSession` (the same
+/// grants / escalation / redaction / audit as plan execution).
+///
+/// Because stdio is the protocol channel, there is no interactive terminal for
+/// confirmation prompts — so the session auto-approves confirmations and relies
+/// on **grants + the escalation classifier + secure-field refusal** for safety.
+/// All diagnostics and the grant preview go to stderr; stdout is protocol-only.
+fn cmd_mcp_serve(cli: &Cli, grants_file: Option<&Path>) -> Result<()> {
+    use operator_core::grants::Grants;
+
+    let mut config = build_engine_config(cli)?;
+    // No interactive confirmations are possible over stdio; safety comes from
+    // the grant envelope + escalation classifier, not per-step prompts.
+    config.yes_to_all = true;
+    config.interactive = false;
+
+    // Resolve the session grant envelope: --grants file overrides config grants.
+    let session_grants: Option<Grants> = if let Some(path) = grants_file {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read grants file {}", path.display()))?;
+        let g: Grants = serde_json::from_str(&text)
+            .with_context(|| format!("failed to parse grants file {}", path.display()))?;
+        Some(g)
+    } else {
+        config.grants.take()
+    };
+    // Avoid double-applying: the session grants are the single envelope layer.
+    config.grants = None;
+
+    // Grant preview (to stderr — stdout is the protocol channel).
+    eprintln!("operator-jack MCP server (protocol on stdio)");
+    print_grant_preview(session_grants.as_ref());
+    eprintln!("  Escalation rules and secure-field refusal always apply.");
+
+    let store = open_store()?;
+    let session = operator_runtime::engine::RunSession::open(store, config, session_grants, None)
+        .map_err(|e| anyhow::anyhow!("failed to open MCP session: {e}"))?;
+    operator_mcp::serve(session).context("MCP server error")?;
+    Ok(())
+}
+
+/// Prints the effective grant envelope to stderr so the operator sees what the
+/// session may do before tools unlock.
+fn print_grant_preview(grants: Option<&operator_core::grants::Grants>) {
+    match grants {
+        Some(g) if !g.is_unrestricted() => {
+            eprintln!("This session may:");
+            let show = |label: &str, pats: &Option<Vec<String>>| {
+                if let Some(p) = pats {
+                    eprintln!("  {label}: {}", p.join(", "));
+                }
+            };
+            show("fs_read ", &g.fs_read);
+            show("fs_write", &g.fs_write);
+            show("exec    ", &g.exec);
+            show("domains ", &g.domains);
+            eprintln!("  (a capability with no grant listed above is unrestricted)");
+        }
+        _ => {
+            eprintln!(
+                "⚠  UNRESTRICTED session: no grants set — file reads/writes, commands, and any \
+                 domain are allowed."
+            );
+            eprintln!("   Pass --grants <file> to bound this session.");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// cmd_secret_* — keychain secret management (M8)
+// ---------------------------------------------------------------------------
+
+/// Stores a secret. Reads the value from `--value` or stdin (so it stays out of
+/// shell history). Never echoes the value.
+fn cmd_secret_set(cli: &Cli, name: &str, value: Option<&str>) -> Result<()> {
+    use std::io::{Read, Write};
+    let value = match value {
+        Some(v) => v.to_string(),
+        None => {
+            if atty_is_interactive() {
+                eprint!("Enter value for secret '{name}' (input hidden not guaranteed): ");
+                let _ = std::io::stderr().flush();
+            }
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .context("failed to read secret value from stdin")?;
+            buf.trim_end_matches(['\n', '\r']).to_string()
+        }
+    };
+    if value.is_empty() {
+        anyhow::bail!("refusing to store an empty secret value");
+    }
+    operator_core::secrets::set_secret(name, &value)
+        .map_err(|e| anyhow::anyhow!("failed to store secret: {e}"))?;
+    if !cli.quiet {
+        eprintln!("Stored secret '{name}' in the keychain. Reference it in plans as {{{{secret:{name}}}}}.");
+    }
+    Ok(())
+}
+
+fn cmd_secret_list(cli: &Cli) -> Result<()> {
+    let names = operator_core::secrets::list_secrets();
+    if cli.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "secrets": names }))?
+        );
+    } else if names.is_empty() {
+        println!("No secrets stored. Add one with: operator-jack secret set <name>");
+    } else {
+        println!("Stored secrets ({}):", names.len());
+        for n in &names {
+            println!("  - {n}");
+        }
+    }
+    Ok(())
+}
+
+fn cmd_secret_rm(cli: &Cli, name: &str) -> Result<()> {
+    operator_core::secrets::delete_secret(name)
+        .map_err(|e| anyhow::anyhow!("failed to remove secret: {e}"))?;
+    if !cli.quiet {
+        eprintln!("Removed secret '{name}'.");
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -360,22 +1299,26 @@ fn cmd_doctor(cli: &Cli) -> Result<()> {
     let helper_found = helper_path.is_some();
     let helper_status = if helper_found { "OK" } else { "NOT FOUND" };
 
-    // 4. Accessibility permission (requires helper)
-    let accessibility_status = if let Some(ref hp) = helper_path {
+    // 4. Accessibility + Screen Recording permissions (require helper)
+    let (accessibility_status, screen_recording_status) = if let Some(ref hp) = helper_path {
         let mut client =
             operator_ipc::client::HelperClient::new(Some(hp.to_string_lossy().to_string()));
         match client.connect() {
             Ok(()) => {
-                let result = client.send(
+                let ax = client.send(
                     "ui.check_accessibility_permission",
                     serde_json::json!({"prompt": true}),
                 );
+                let sr = client.send(
+                    "ui.check_screen_recording_permission",
+                    serde_json::json!({}),
+                );
                 client.disconnect();
-                match result {
+                let ax_status = match ax {
                     Ok(val) => {
                         if val
                             .get("trusted")
-                            .and_then(|v: &serde_json::Value| v.as_bool())
+                            .and_then(|v| v.as_bool())
                             .unwrap_or(false)
                         {
                             "GRANTED"
@@ -387,16 +1330,39 @@ fn cmd_doctor(cli: &Cli) -> Result<()> {
                         tracing::warn!("accessibility check failed: {}", e);
                         "CHECK FAILED"
                     }
-                }
+                };
+                let sr_status = match sr {
+                    Ok(val) => {
+                        if val
+                            .get("granted")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                        {
+                            "GRANTED"
+                        } else {
+                            "NOT GRANTED"
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("screen recording check failed: {}", e);
+                        "CHECK FAILED"
+                    }
+                };
+                (ax_status, sr_status)
             }
             Err(e) => {
                 tracing::warn!("helper connection failed: {}", e);
-                "CHECK FAILED"
+                ("CHECK FAILED", "CHECK FAILED")
             }
         }
     } else {
-        "SKIPPED (helper not found)"
+        ("SKIPPED (helper not found)", "SKIPPED (helper not found)")
     };
+
+    // 5. Planner providers (readiness of the `do` natural-language command).
+    let planner = operator_planner::Planner::new(operator_planner::PlannerConfig::default());
+    let providers = planner.available_providers();
+    let do_ready = providers.iter().any(|(_, ready)| *ready);
 
     // Detect first run (no config file exists).
     let config_path = OperatorConfig::default_path();
@@ -424,9 +1390,21 @@ fn cmd_doctor(cli: &Cli) -> Result<()> {
                 "NOT GRANTED" => "not_granted",
                 _ => "skipped",
             },
+            "screen_recording": match screen_recording_status {
+                "GRANTED" => "granted",
+                "NOT GRANTED" => "not_granted",
+                _ => "skipped",
+            },
             "db_path": db_path.display().to_string(),
             "log_dir_path": log_dir.display().to_string(),
             "first_run": is_first_run,
+            "planner": {
+                "do_ready": do_ready,
+                "providers": providers
+                    .iter()
+                    .map(|(pt, ready)| (pt.display_name().to_string(), serde_json::json!(ready)))
+                    .collect::<serde_json::Map<_, _>>(),
+            },
         });
         println!("{}", serde_json::to_string_pretty(&obj)?);
     } else {
@@ -444,6 +1422,44 @@ fn cmd_doctor(cli: &Cli) -> Result<()> {
         println!("Log dir:       {}", log_status);
         println!("Helper:        {}", helper_status);
         println!("Accessibility: {}", accessibility_status);
+        println!("Screen Rec.:   {}", screen_recording_status);
+        println!(
+            "Planner (do):  {}",
+            if do_ready { "READY" } else { "NOT CONFIGURED" }
+        );
+        for (pt, ready) in &providers {
+            let mark = if *ready { "✓" } else { "✗" };
+            let hint = if *ready {
+                String::new()
+            } else if pt.requires_api_key() {
+                format!(" — set {}", pt.api_key_env_var())
+            } else {
+                " — start Ollama and pull a model".to_string()
+            };
+            println!("               {} {}{}", mark, pt.display_name(), hint);
+        }
+
+        // Native macOS lane (M14): Automation (AppleEvents) consent + Full Disk Access.
+        let fda = full_disk_access_probe();
+        println!(
+            "Full Disk Acc: {}",
+            if fda {
+                "GRANTED"
+            } else {
+                "not granted — needed for script.* against Mail/Messages data"
+            }
+        );
+        println!(
+            "Automation:    per-app consent — the first script.applescript/jxa to a given app"
+        );
+        println!("               triggers a one-time macOS approval dialog (AppleEvents / TCC)");
+
+        if !do_ready {
+            println!();
+            println!("  `operator-jack do` needs an LLM provider. Either:");
+            println!("    - export ANTHROPIC_API_KEY / OPENAI_API_KEY / KIMI_API_KEY, or");
+            println!("    - run Ollama locally and `ollama pull llama3.2`");
+        }
 
         if accessibility_status == "NOT GRANTED" {
             println!();
@@ -582,6 +1598,13 @@ fn cmd_plan_save(cli: &Cli, plan_file: &Path) -> Result<()> {
 /// Exits with an appropriate code reflecting the run outcome.
 fn cmd_exec(cli: &Cli, plan_id: &str) -> Result<()> {
     let store = open_store()?;
+    // Control-flow plans (M13) execute through the interpreter over a RunSession,
+    // not the flat engine loop.
+    if let Ok((_, plan)) = store.get_plan(plan_id) {
+        if operator_runtime::control::has_control_flow(&plan.steps) {
+            return run_control_plan(cli, &plan);
+        }
+    }
     let config = build_engine_config(cli)?;
     let data_dir = resolve_data_dir();
     let mut engine = Engine::new(store, config);
@@ -606,7 +1629,8 @@ fn cmd_exec(cli: &Cli, plan_id: &str) -> Result<()> {
     match result {
         Ok(summary) => {
             print_run_summary(cli, &summary);
-            let code = exit_code_for_status(&summary.status);
+            print_pause_hint_if_paused(&open_store()?, &summary);
+            let code = exit_code_for_summary(&summary);
             if code != 0 {
                 std::process::exit(code);
             }
@@ -621,6 +1645,185 @@ fn cmd_exec(cli: &Cli, plan_id: &str) -> Result<()> {
             }
             std::process::exit(1);
         }
+    }
+}
+
+/// Resumes a paused PLAN run (M11): verifies its approval, then re-executes the
+/// plan skipping already-completed steps (with a one-shot escalation allowance
+/// if the pause was an escalation).
+fn cmd_run_resume(cli: &Cli, run_id: &str) -> Result<()> {
+    use operator_core::types::{ApprovalKind, ApprovalStatus, CheckpointKind};
+    use operator_runtime::engine::ResumeState;
+
+    let store = open_store()?;
+    let cp = store
+        .load_checkpoint(run_id)
+        .context("failed to read checkpoint")?
+        .ok_or_else(|| {
+            anyhow::anyhow!("no paused run with id {run_id} (no checkpoint on record)")
+        })?;
+    if cp.kind != CheckpointKind::Plan {
+        bail!(
+            "run {run_id} is an agent run — resume it with `operator-jack agent --resume {run_id}`"
+        );
+    }
+
+    let approval = store
+        .latest_approval_for_run(run_id)
+        .context("failed to read approvals")?
+        .ok_or_else(|| anyhow::anyhow!("no approval on record for run {run_id}"))?;
+    match approval.status {
+        ApprovalStatus::Pending => bail!(
+            "run {run_id} is still awaiting approval — run `operator-jack approvals approve {}` first",
+            approval.id
+        ),
+        ApprovalStatus::Denied => bail!("the approval for run {run_id} was denied; not resuming"),
+        ApprovalStatus::Approved => {}
+    }
+
+    let old_run = store.get_run(run_id).context("failed to load paused run")?;
+    let cursor = cp
+        .cursor
+        .get("step_index")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as usize;
+    let variables: std::collections::HashMap<String, serde_json::Value> = cp
+        .variables
+        .as_ref()
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    let config = build_engine_config(cli)?;
+    let data_dir = resolve_data_dir();
+    let store2 = open_store()?;
+    let mut engine = Engine::new(store2, config);
+    engine.resume_next(ResumeState {
+        cursor,
+        variables,
+        grant_escalation: approval.kind == ApprovalKind::Escalation,
+    });
+
+    let cancel_flag: Arc<AtomicBool> = engine.cancel_flag();
+    let _ = set_ctrlc_handler(Arc::clone(&cancel_flag));
+    let data_dir_clone = data_dir.clone();
+    engine.set_on_run_created(move |rid| {
+        let _ = write_pid_file(&data_dir_clone, rid);
+    });
+
+    eprintln!("Resuming plan run {run_id} from step {cursor}…");
+    let result = engine.execute_plan(&old_run.plan_id);
+    let _ = remove_pid_file(&data_dir);
+
+    // Consume the old checkpoint so the same pause can't be resumed twice.
+    let _ = store.delete_checkpoint(run_id);
+
+    match result {
+        Ok(summary) => {
+            print_run_summary(cli, &summary);
+            print_pause_hint_if_paused(&store, &summary);
+            let code = exit_code_for_summary(&summary);
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
+        Err(e) => {
+            if cli.json {
+                println!("{}", serde_json::json!({ "error": e.to_string() }));
+            } else {
+                eprintln!("Resume failed: {}", e);
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+/// If a plan run paused, prints the pending approval id + resume command and
+/// raises a notification (M11 supervision DX).
+fn print_pause_hint_if_paused(store: &Store, summary: &RunSummary) {
+    if summary.status != RunStatus::Paused {
+        return;
+    }
+    let approval = store
+        .latest_approval_for_run(&summary.run_id)
+        .ok()
+        .flatten();
+    let reason = approval
+        .as_ref()
+        .map(|a| a.summary.clone())
+        .unwrap_or_else(|| "human input required".to_string());
+    notify_user("Operator Jack: run paused", &reason);
+    if let Some(a) = approval {
+        eprintln!();
+        eprintln!("⏸  Run paused: {reason}");
+        eprintln!("   Approve:  operator-jack approvals approve {}", a.id);
+        eprintln!("   Resume:   operator-jack run --resume {}", summary.run_id);
+    }
+}
+
+/// Executes a plan that contains `control.*` steps (M13) via the control-flow
+/// interpreter over a `RunSession` — each leaf step is gated/audited exactly as
+/// in flat execution. Confirmations are non-interactive here (like MCP/agent),
+/// so safe-mode medium/high steps need `--yes` or a grant.
+fn run_control_plan(cli: &Cli, plan: &Plan) -> Result<()> {
+    use operator_runtime::engine::RunSession;
+
+    let mut config = build_engine_config(cli)?;
+    // Mode ceiling: a plan may only make itself MORE restrictive.
+    if matches!(plan.mode, Some(Mode::Safe)) {
+        config.mode = Mode::Safe;
+    }
+    // Effective allow-lists = intersection of config and plan (most restrictive).
+    config.allow_apps = intersect_allow(&config.allow_apps, plan.allow_apps.as_deref());
+    config.allow_domains = intersect_allow(&config.allow_domains, plan.allow_domains.as_deref());
+
+    let store = open_store()?;
+    let data_dir = resolve_data_dir();
+    let mut session = RunSession::open(store, config, plan.grants.clone(), plan.budget.clone())
+        .map_err(|e| anyhow::anyhow!("failed to open control-flow session: {e}"))?;
+    let run_id = session.run_id().to_string();
+    let _ = write_pid_file(&data_dir, &run_id);
+
+    let vars = plan.variables.clone().unwrap_or_default();
+    let result = session.run_program(&plan.steps, vars);
+    let summary = session.finish();
+    let _ = remove_pid_file(&data_dir);
+
+    match result {
+        Ok(()) => {
+            print_run_summary(cli, &summary);
+            let code = exit_code_for_summary(&summary);
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
+        Err(e) => {
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::json!({ "error": e.to_string(), "run_id": run_id })
+                );
+            } else {
+                print_run_summary(cli, &summary);
+                eprintln!("Control flow stopped: {e}");
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Intersects a config allow-list with a plan allow-list. Empty means "allow
+/// all", so an empty side yields the other; two non-empty sides intersect.
+fn intersect_allow(config: &[String], plan: Option<&[String]>) -> Vec<String> {
+    match plan {
+        None => config.to_vec(),
+        Some(p) if config.is_empty() => p.to_vec(),
+        Some(p) => config
+            .iter()
+            .filter(|c| p.iter().any(|x| x.eq_ignore_ascii_case(c)))
+            .cloned()
+            .collect(),
     }
 }
 
@@ -689,6 +1892,11 @@ fn cmd_run(cli: &Cli, plan_file: Option<PathBuf>, instruction: Option<String>) -
         }
     }
 
+    // Control-flow plans (M13) run through the interpreter over a RunSession.
+    if operator_runtime::control::has_control_flow(&plan.steps) {
+        return run_control_plan(cli, &plan);
+    }
+
     // Execute (same logic as cmd_exec).
     let config = build_engine_config(cli)?;
     let data_dir = resolve_data_dir();
@@ -714,7 +1922,8 @@ fn cmd_run(cli: &Cli, plan_file: Option<PathBuf>, instruction: Option<String>) -
     match result {
         Ok(summary) => {
             print_run_summary(cli, &summary);
-            let code = exit_code_for_status(&summary.status);
+            print_pause_hint_if_paused(&open_store()?, &summary);
+            let code = exit_code_for_summary(&summary);
             if code != 0 {
                 std::process::exit(code);
             }
@@ -937,7 +2146,8 @@ fn cmd_do(
     match result {
         Ok(summary) => {
             print_run_summary(cli, &summary);
-            let code = exit_code_for_status(&summary.status);
+            print_pause_hint_if_paused(&open_store()?, &summary);
+            let code = exit_code_for_summary(&summary);
             if code != 0 {
                 std::process::exit(code);
             }
@@ -1138,6 +2348,328 @@ fn cmd_logs(cli: &Cli, run_id: Option<String>, full: bool) -> Result<()> {
 
 /// Reads the PID file from the data directory. If a running process is found,
 /// sends SIGTERM and waits up to 5 seconds. If still alive, sends SIGKILL.
+/// Reverses a run's filesystem mutations from its undo journal (M15).
+fn cmd_undo(cli: &Cli, run_id: &str) -> Result<()> {
+    let undo_dir = resolve_data_dir().join("undo");
+    match operator_runtime::undo::restore(&undo_dir, run_id) {
+        Ok(report) => {
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Undo of run {run_id}: {} reversed, {} failed",
+                    report.reversed, report.failed
+                );
+                for m in &report.messages {
+                    println!("  - {m}");
+                }
+                if report.reversed == 0 && report.failed == 0 {
+                    println!("  (no filesystem mutations recorded for this run)");
+                }
+            }
+            if report.failed > 0 {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
+        Err(e) => {
+            if cli.json {
+                println!("{}", serde_json::json!({ "error": e }));
+            } else {
+                eprintln!("Undo failed: {e}");
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Runs a plan to completion in-process and returns its summary WITHOUT exiting
+/// (unlike `cmd_run`/`cmd_exec`). Used by `watch` and `eval`. Validates, saves,
+/// then routes control-flow plans through the interpreter and flat plans through
+/// the engine. Writes/removes the PID file so it participates in the run mutex.
+fn run_plan_headless(cli: &Cli, plan: &Plan) -> Result<RunSummary> {
+    validate_plan(plan).map_err(|errs| {
+        anyhow::anyhow!(
+            "plan validation failed: {}",
+            errs.iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("; ")
+        )
+    })?;
+    let data_dir = resolve_data_dir();
+
+    if operator_runtime::control::has_control_flow(&plan.steps) {
+        use operator_runtime::engine::RunSession;
+        let mut config = build_engine_config(cli)?;
+        if matches!(plan.mode, Some(Mode::Safe)) {
+            config.mode = Mode::Safe;
+        }
+        config.allow_apps = intersect_allow(&config.allow_apps, plan.allow_apps.as_deref());
+        config.allow_domains =
+            intersect_allow(&config.allow_domains, plan.allow_domains.as_deref());
+        let store = open_store()?;
+        let mut session = RunSession::open(store, config, plan.grants.clone(), plan.budget.clone())
+            .map_err(|e| anyhow::anyhow!("failed to open session: {e}"))?;
+        let _ = write_pid_file(&data_dir, session.run_id());
+        let vars = plan.variables.clone().unwrap_or_default();
+        let _ = session.run_program(&plan.steps, vars);
+        let summary = session.finish();
+        let _ = remove_pid_file(&data_dir);
+        Ok(summary)
+    } else {
+        let store = open_store()?;
+        let plan_id = store.save_plan(plan).context("failed to save plan")?;
+        let config = build_engine_config(cli)?;
+        let store2 = open_store()?;
+        let mut engine = Engine::new(store2, config);
+        let data_dir_clone = data_dir.clone();
+        engine.set_on_run_created(move |rid| {
+            let _ = write_pid_file(&data_dir_clone, rid);
+        });
+        let result = engine.execute_plan(&plan_id);
+        let _ = remove_pid_file(&data_dir);
+        result.map_err(|e| anyhow::anyhow!("execution failed: {e}"))
+    }
+}
+
+/// True if another operator-jack run currently holds the PID file (a live PID).
+fn run_in_progress(data_dir: &Path) -> bool {
+    match read_pid_file(data_dir) {
+        Ok(Some((pid, _))) => {
+            // Signal 0 checks existence without killing.
+            Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+fn path_mtime(path: &Path) -> Option<std::time::SystemTime> {
+    // For a directory, use the latest mtime among its direct entries so new/
+    // changed files inside it trigger.
+    if path.is_dir() {
+        let mut latest = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        if let Ok(rd) = std::fs::read_dir(path) {
+            for e in rd.flatten() {
+                if let Ok(m) = e.metadata().and_then(|m| m.modified()) {
+                    if latest.map(|l| m > l).unwrap_or(true) {
+                        latest = Some(m);
+                    }
+                }
+            }
+        }
+        latest
+    } else {
+        std::fs::metadata(path).and_then(|m| m.modified()).ok()
+    }
+}
+
+/// Watch for a trigger and fire a plan unattended (M15). Serialized by the run
+/// mutex; a trigger during a run is queued (pending) and fired afterward.
+fn cmd_watch(
+    cli: &Cli,
+    plan_file: &Path,
+    interval: u64,
+    watch_path: Option<&Path>,
+    install_launchd: bool,
+) -> Result<()> {
+    if install_launchd {
+        return install_watch_launchd(plan_file, interval, watch_path);
+    }
+
+    let plan = read_plan_file(plan_file)?;
+    validate_plan(&plan).map_err(|e| anyhow::anyhow!("plan invalid: {} error(s)", e.len()))?;
+
+    let data_dir = resolve_data_dir();
+    let stop = Arc::new(AtomicBool::new(false));
+    let _ = set_ctrlc_handler(Arc::clone(&stop));
+
+    match watch_path {
+        Some(p) => eprintln!(
+            "operator-jack watch — firing {} when {} changes (poll {interval}s). Ctrl-C to stop.",
+            plan.name,
+            p.display()
+        ),
+        None => eprintln!(
+            "operator-jack watch — firing {} every {interval}s. Ctrl-C to stop.",
+            plan.name
+        ),
+    }
+
+    // Baseline mtime so a file-trigger doesn't fire immediately on startup.
+    let mut last_mtime = watch_path.and_then(path_mtime);
+    let mut pending = false;
+
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+
+        let triggered = match watch_path {
+            Some(p) => {
+                let m = path_mtime(p);
+                let changed = m != last_mtime;
+                last_mtime = m;
+                changed
+            }
+            None => true, // interval-only: every tick
+        };
+
+        if triggered || pending {
+            if run_in_progress(&data_dir) {
+                eprintln!("  (a run is in progress — trigger queued)");
+                pending = true;
+            } else {
+                pending = false;
+                match run_plan_headless(cli, &plan) {
+                    Ok(s) => eprintln!("  fired: run {} → {:?}", s.run_id, s.status),
+                    Err(e) => eprintln!("  run error: {e}"),
+                }
+            }
+        }
+
+        // Sleep the interval, but stay responsive to Ctrl-C.
+        let ticks = (interval * 4).max(1);
+        for _ in 0..ticks {
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
+    eprintln!("watch stopped.");
+    Ok(())
+}
+
+/// Writes a launchd LaunchAgent plist that runs this watch at login.
+fn install_watch_launchd(plan_file: &Path, interval: u64, watch_path: Option<&Path>) -> Result<()> {
+    let exe = std::env::current_exe().context("cannot resolve current executable")?;
+    let plan_abs = std::fs::canonicalize(plan_file).unwrap_or_else(|_| plan_file.to_path_buf());
+
+    let mut prog_args = vec![
+        exe.to_string_lossy().to_string(),
+        "watch".to_string(),
+        "--plan-file".to_string(),
+        plan_abs.to_string_lossy().to_string(),
+        "--interval".to_string(),
+        interval.to_string(),
+        "--yes".to_string(),
+    ];
+    if let Some(p) = watch_path {
+        let p_abs = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        prog_args.push("--path".to_string());
+        prog_args.push(p_abs.to_string_lossy().to_string());
+    }
+    let args_xml: String = prog_args
+        .iter()
+        .map(|a| format!("    <string>{}</string>", xml_escape(a)))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let label = "com.operator-jack.watch";
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{label}</string>
+  <key>ProgramArguments</key>
+  <array>
+{args_xml}
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+</dict>
+</plist>
+"#
+    );
+
+    let home = std::env::var("HOME").context("HOME not set")?;
+    let dir = PathBuf::from(&home).join("Library/LaunchAgents");
+    std::fs::create_dir_all(&dir)?;
+    let dest = dir.join(format!("{label}.plist"));
+    std::fs::write(&dest, plist).with_context(|| format!("failed to write {}", dest.display()))?;
+
+    println!("Wrote launchd agent: {}", dest.display());
+    println!("Load it with:  launchctl load {}", dest.display());
+    println!("Unload it with: launchctl unload {}", dest.display());
+    Ok(())
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Runs an eval suite: every `*.json` plan in `suite` is executed and scored
+/// pass (Succeeded, no failed steps) / fail, reporting a pass rate (M15).
+fn cmd_eval(cli: &Cli, suite: &Path) -> Result<()> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(suite)
+        .with_context(|| format!("cannot read suite dir {}", suite.display()))?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().map(|x| x == "json").unwrap_or(false))
+        .collect();
+    files.sort();
+
+    if files.is_empty() {
+        bail!("no .json plan files in {}", suite.display());
+    }
+
+    let mut results: Vec<(String, bool, String)> = Vec::new();
+    for f in &files {
+        let name = f
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let outcome = match read_plan_file(f) {
+            Ok(plan) => match run_plan_headless(cli, &plan) {
+                Ok(s) => {
+                    let pass = matches!(s.status, RunStatus::Succeeded) && s.steps_failed == 0;
+                    (pass, format!("{:?} ({} steps)", s.status, s.steps_total))
+                }
+                Err(e) => (false, format!("error: {e}")),
+            },
+            Err(e) => (false, format!("parse error: {e}")),
+        };
+        results.push((name, outcome.0, outcome.1));
+    }
+
+    let passed = results.iter().filter(|r| r.1).count();
+    let total = results.len();
+    let rate = (passed as f64 / total as f64) * 100.0;
+
+    if cli.json {
+        let arr: Vec<_> = results
+            .iter()
+            .map(|(n, p, d)| serde_json::json!({ "task": n, "pass": p, "detail": d }))
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "passed": passed, "total": total, "pass_rate": rate, "results": arr
+            }))?
+        );
+    } else {
+        println!("Eval suite: {}", suite.display());
+        for (n, p, d) in &results {
+            println!("  [{}] {:<40} {}", if *p { "PASS" } else { "FAIL" }, n, d);
+        }
+        println!();
+        println!("Pass rate: {passed}/{total} ({rate:.0}%)");
+    }
+
+    if passed < total {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 fn cmd_stop(cli: &Cli) -> Result<()> {
     let data_dir = resolve_data_dir();
 
@@ -1264,7 +2796,7 @@ fn print_ax_tree(node: &serde_json::Value, indent: usize) {
     }
     if let Some(v) = value {
         if !v.is_empty() {
-            let display_val = if v.len() > 40 { &v[..40] } else { v };
+            let display_val = truncate_str(v, 40);
             line.push_str(&format!(" value=\"{}\"", display_val));
         }
     }
@@ -1307,6 +2839,22 @@ fn resolve_log_dir() -> PathBuf {
 /// Returns the database path: `<data_dir>/operator-jack.db`.
 fn resolve_db_path() -> PathBuf {
     resolve_data_dir().join("operator-jack.db")
+}
+
+/// Best-effort Full Disk Access probe (M14): tries to list a TCC-protected
+/// directory (the user's Mail store). Success implies FDA is granted to this
+/// process; failure is the common case and is only informational.
+fn full_disk_access_probe() -> bool {
+    let home = match std::env::var("HOME") {
+        Ok(h) => h,
+        Err(_) => return false,
+    };
+    let protected = PathBuf::from(home).join("Library/Mail");
+    // If the path doesn't exist at all, we can't conclude — treat as not-granted.
+    if !protected.exists() {
+        return false;
+    }
+    std::fs::read_dir(&protected).is_ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -1393,6 +2941,15 @@ fn build_engine_config(cli: &Cli) -> Result<EngineConfig> {
         default_timeout_ms: cfg.default_step_timeout_ms,
         default_retries: cfg.default_retries,
         default_backoff_ms: cfg.default_retry_backoff_ms,
+        grants: cfg.grants.clone(),
+        budget: cfg.budget.clone(),
+        // Undo journal (M15) is on by default in `--dry-run`? No — only for real
+        // runs. Disabled under dry-run (nothing mutates).
+        undo_dir: if cli.dry_run {
+            None
+        } else {
+            Some(resolve_data_dir().join("undo"))
+        },
     })
 }
 
@@ -1484,12 +3041,27 @@ fn read_pid_file(data_dir: &Path) -> Result<Option<(u32, String)>> {
 /// - 3: policy denied (handled elsewhere)
 /// - 4: reserved
 /// - 5: cancelled
-fn exit_code_for_status(status: &RunStatus) -> i32 {
-    match status {
+fn exit_code_for_summary(summary: &RunSummary) -> i32 {
+    // A policy/grant/escalation denial takes the dedicated exit code 3 over a
+    // generic failure code.
+    if summary.policy_denied
+        && matches!(
+            summary.status,
+            RunStatus::Failed | RunStatus::CompletedWithErrors
+        )
+    {
+        return 3;
+    }
+    match summary.status {
         RunStatus::Succeeded => 0,
         RunStatus::Failed => 1,
         RunStatus::CompletedWithErrors => 1,
         RunStatus::Cancelled => 5,
+        // Stopped early for a non-error reason (budget): distinct from success
+        // and from a step error.
+        RunStatus::Partial => 7,
+        // Paused awaiting approval/takeover — a clean, resumable stop (exit 0).
+        RunStatus::Paused => 0,
         RunStatus::Queued | RunStatus::Running => 0,
     }
 }
@@ -1557,6 +3129,16 @@ fn print_run_summary(cli: &Cli, summary: &RunSummary) {
 /// 4. A fallback path next to the current executable
 ///
 /// Returns `Some(path)` if the binary is found, `None` otherwise.
+/// Truncates a string to at most `max` characters, cutting at a UTF-8 char
+/// boundary. Byte-slicing at a fixed index (`&s[..n]`) panics when `n` lands
+/// inside a multi-byte character.
+fn truncate_str(s: &str, max: usize) -> &str {
+    match s.char_indices().nth(max) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
+    }
+}
+
 fn resolve_helper_path(cli: &Cli) -> Option<PathBuf> {
     // 1. CLI flag.
     if let Some(ref p) = cli.helper_path {
@@ -1574,7 +3156,17 @@ fn resolve_helper_path(cli: &Cli) -> Option<PathBuf> {
         }
     }
 
-    // 3. System PATH via `which`.
+    // 3. Config file (`helper_path` in ~/.config/operator-jack/config.toml).
+    if let Ok(cfg) = OperatorConfig::load() {
+        if let Some(ref p) = cfg.helper_path {
+            let path = PathBuf::from(p);
+            if path.exists() {
+                return Some(path);
+            }
+        }
+    }
+
+    // 4. System PATH via `which`.
     if let Ok(output) = Command::new("which").arg("operator-macos-helper").output() {
         if output.status.success() {
             let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -1587,7 +3179,7 @@ fn resolve_helper_path(cli: &Cli) -> Option<PathBuf> {
         }
     }
 
-    // 4. Fallback: next to current executable.
+    // 5. Fallback: next to current executable.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let fallback = dir.join("operator-macos-helper");
@@ -1597,7 +3189,7 @@ fn resolve_helper_path(cli: &Cli) -> Option<PathBuf> {
         }
     }
 
-    // 5. Dev fallback: Swift build output relative to the executable.
+    // 6. Dev fallback: Swift build output relative to the executable.
     //    When running from `target/debug/operator-jack`, the helper lives at
     //    `../../macos-helper/.build/{release,debug}/operator-macos-helper`.
     if let Ok(exe) = std::env::current_exe() {
@@ -1756,7 +3348,9 @@ fn cmd_skill_list(cli: &Cli) -> Result<()> {
     use operator_skills::SkillRegistry;
 
     let mut registry = SkillRegistry::new();
-    registry.discover().map_err(|e| anyhow::anyhow!("Failed to discover skills: {}", e))?;
+    registry
+        .discover()
+        .map_err(|e| anyhow::anyhow!("Failed to discover skills: {}", e))?;
 
     let skills = registry.list();
 
@@ -1791,7 +3385,7 @@ fn cmd_skill_list(cli: &Cli) -> Result<()> {
         println!("{}", "-".repeat(80));
         for skill in skills {
             let desc = skill.description.as_deref().unwrap_or("-");
-            let desc_short = if desc.len() > 28 { &desc[..28] } else { desc };
+            let desc_short = truncate_str(desc, 28);
             let params: Vec<_> = skill.parameters.iter().map(|p| p.name.clone()).collect();
             let params_str = if params.is_empty() {
                 "none".to_string()
@@ -1832,7 +3426,11 @@ fn cmd_skill_validate(cli: &Cli, skill_file: &Path) -> Result<()> {
                 }
                 println!("  Parameters: {}", manifest.parameters.len());
                 for param in &manifest.parameters {
-                    let req = if param.required { "required" } else { "optional" };
+                    let req = if param.required {
+                        "required"
+                    } else {
+                        "optional"
+                    };
                     println!("    - {} ({:?}, {})", param.name, param.param_type, req);
                 }
                 println!("  Steps: {}", manifest.steps.len());
@@ -1855,19 +3453,17 @@ fn cmd_skill_validate(cli: &Cli, skill_file: &Path) -> Result<()> {
 }
 
 /// Run a skill with parameters.
-fn cmd_skill_run(
-    cli: &Cli,
-    skill_name: &str,
-    params: &[(String, String)],
-) -> Result<()> {
-    use operator_skills::{SkillRegistry, registry::ensure_user_skills_dir};
+fn cmd_skill_run(cli: &Cli, skill_name: &str, params: &[(String, String)]) -> Result<()> {
+    use operator_skills::{registry::ensure_user_skills_dir, SkillRegistry};
     use std::collections::HashMap;
 
     // Ensure user skills dir exists (creates it if not present)
     let _ = ensure_user_skills_dir();
 
     let mut registry = SkillRegistry::new();
-    registry.discover().map_err(|e| anyhow::anyhow!("Failed to discover skills: {}", e))?;
+    registry
+        .discover()
+        .map_err(|e| anyhow::anyhow!("Failed to discover skills: {}", e))?;
 
     let manifest = registry.get(skill_name).ok_or_else(|| {
         anyhow::anyhow!(
@@ -1880,14 +3476,33 @@ fn cmd_skill_run(
     let params_map: HashMap<String, String> = params.iter().cloned().collect();
 
     // Resolve parameters
-    let resolved = manifest.resolve(params_map).map_err(|e| {
-        anyhow::anyhow!("Failed to resolve skill parameters: {}", e)
-    })?;
+    let resolved = manifest
+        .resolve(params_map)
+        .map_err(|e| anyhow::anyhow!("Failed to resolve skill parameters: {}", e))?;
 
     // Expand to plan
-    let plan = resolved.to_plan().map_err(|e| {
-        anyhow::anyhow!("Failed to expand skill to plan: {}", e)
-    })?;
+    let plan = resolved
+        .to_plan()
+        .map_err(|e| anyhow::anyhow!("Failed to expand skill to plan: {}", e))?;
+
+    // Validate the expanded plan BEFORE executing, so a skill with bad step
+    // params fails loudly here rather than mid-run inside the Swift helper.
+    if let Err(errors) = validate_plan(&plan) {
+        if cli.json {
+            let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+            let obj = serde_json::json!({ "valid": false, "errors": msgs });
+            println!("{}", serde_json::to_string_pretty(&obj)?);
+        } else {
+            eprintln!(
+                "Skill '{skill_name}' expanded to an invalid plan ({} error(s)):",
+                errors.len()
+            );
+            for err in &errors {
+                eprintln!("  - {err}");
+            }
+        }
+        std::process::exit(2);
+    }
 
     // Execute the plan (same logic as cmd_run)
     let store = open_store()?;
@@ -1921,7 +3536,8 @@ fn cmd_skill_run(
     match result {
         Ok(summary) => {
             print_run_summary(cli, &summary);
-            let code = exit_code_for_status(&summary.status);
+            print_pause_hint_if_paused(&open_store()?, &summary);
+            let code = exit_code_for_summary(&summary);
             if code != 0 {
                 std::process::exit(code);
             }
@@ -1938,7 +3554,6 @@ fn cmd_skill_run(
         }
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Browser command handlers (M5)
@@ -1964,17 +3579,23 @@ fn cmd_browser_doctor(cli: &Cli) -> Result<()> {
 
 /// Launch Chrome with remote debugging.
 async fn cmd_browser_launch_async(_cli: &Cli, port: u16) -> Result<()> {
-    let mut child = operator_exec_browser::launch_chrome(port).await?;
-    
+    // Launch in an operator-owned profile under the app data dir — never the
+    // user's real Chrome profile (M12 isolation). Headed so the window is usable.
+    let profile_dir = resolve_data_dir()
+        .join("browser-profiles")
+        .join(format!("launch-{port}"));
+    let mut child = operator_exec_browser::launch_chrome(port, &profile_dir, false).await?;
+
     println!("Chrome launched with remote debugging on port {}", port);
+    println!("Isolated profile: {}", profile_dir.display());
     println!("Press Ctrl+C to stop");
 
     // Wait for the process
     tokio::signal::ctrl_c().await?;
-    
+
     child.kill().await?;
     println!("Chrome stopped");
-    
+
     Ok(())
 }
 
@@ -1985,14 +3606,14 @@ fn cmd_browser_launch(cli: &Cli, port: u16) -> Result<()> {
 
 /// Navigate to a URL.
 async fn cmd_browser_navigate_async(_cli: &Cli, url: &str, port: u16) -> Result<()> {
-    use operator_exec_browser::{BrowserClient, discover_chrome_ws_url};
-    
+    use operator_exec_browser::{discover_chrome_ws_url, BrowserClient};
+
     let ws_url = discover_chrome_ws_url(port).await?;
     let client = BrowserClient::connect(ws_url).await?;
-    
+
     let frame_id = client.navigate(url).await?;
     println!("Navigated to {} (frame: {})", url, frame_id);
-    
+
     client.close().await;
     Ok(())
 }
@@ -2009,16 +3630,16 @@ async fn cmd_browser_screenshot_async(
     full_page: bool,
     port: u16,
 ) -> Result<()> {
-    use operator_exec_browser::{BrowserClient, discover_chrome_ws_url};
-    
+    use operator_exec_browser::{discover_chrome_ws_url, BrowserClient};
+
     let ws_url = discover_chrome_ws_url(port).await?;
     let client = BrowserClient::connect(ws_url).await?;
-    
+
     let image_data = client.screenshot(full_page).await?;
     std::fs::write(output, image_data)?;
-    
+
     println!("Screenshot saved to {}", output.display());
-    
+
     client.close().await;
     Ok(())
 }

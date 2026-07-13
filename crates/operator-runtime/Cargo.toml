@@ -8,9 +8,13 @@ operator-core = { path = "../operator-core" }
 operator-store = { path = "../operator-store" }
 operator-ipc = { path = "../operator-ipc" }
 operator-exec-system = { path = "../operator-exec-system" }
+operator-exec-browser = { path = "../operator-exec-browser" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
 ulid.workspace = true
 tracing.workspace = true
+
+# Dedicated tokio runtime for the browser lane's sync↔async bridge (M12).
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }

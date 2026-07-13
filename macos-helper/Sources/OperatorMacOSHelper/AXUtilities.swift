@@ -64,6 +64,16 @@ struct SelectorParams {
 
         return s
     }
+
+    /// True if the selector has at least one field the matcher actually checks.
+    /// (`path` is a real matcher as of M7 — a suffix match on the computed
+    /// traversal path.) `index`, `window`, and `maxDepth` are filters/scope, not
+    /// content matchers; `anyOf` is resolved separately by the caller.
+    var hasMatchableCriteria: Bool {
+        role != nil || subrole != nil || name != nil || nameContains != nil
+            || description != nil || descriptionContains != nil || value != nil
+            || valueContains != nil || identifier != nil || path != nil
+    }
 }
 
 /// Window scoping parameters.
@@ -109,8 +119,17 @@ func resolveApp(name: String) throws -> NSRunningApplication {
 // MARK: - AX Element Helpers
 
 /// Creates an AXUIElement for an application by PID.
+///
+/// On creation we (best-effort) enable Chromium/Electron accessibility and bound
+/// the per-message timeout so a busy target degrades instead of hanging every
+/// attribute read. `AXManualAccessibility` is the documented Chromium flag that
+/// makes web/Electron content (Chrome web areas, Slack, VS Code, Discord)
+/// visible to assistive clients; without it those trees are empty.
 func axAppElement(for app: NSRunningApplication) -> AXUIElement {
-    AXUIElementCreateApplication(app.processIdentifier)
+    let element = AXUIElementCreateApplication(app.processIdentifier)
+    AXUIElementSetAttributeValue(element, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+    AXUIElementSetMessagingTimeout(element, 5.0)
+    return element
 }
 
 /// Reads an AX attribute, returning nil on failure.
@@ -146,6 +165,83 @@ func axGetArrayAttribute(_ element: AXUIElement, _ attr: String) -> [AXUIElement
     let result = AXUIElementCopyAttributeValues(element, attr as CFString, 0, count, &values)
     guard result == .success, let array = values as? [AXUIElement] else { return [] }
     return array
+}
+
+/// PIDs whose accessibility tree we have already waited to settle this session.
+private var settledAxPids = Set<pid_t>()
+
+/// Chromium/Electron apps build their a11y tree lazily after `AXManualAccessibility`
+/// is set (see `axAppElement`), so the first read can be empty. On the first
+/// observation of an app this session, wait until the shallow node count
+/// stabilizes (or a timeout), so the first snapshot/find sees real content.
+/// Native apps stabilize on the first check (~one poll interval); web apps take
+/// up to the cap. No-op on subsequent calls for the same PID.
+func settleAccessibilityTree(app: NSRunningApplication, root: AXUIElement) {
+    let pid = app.processIdentifier
+    if settledAxPids.contains(pid) { return }
+    settledAxPids.insert(pid)
+
+    func shallowCount(_ el: AXUIElement, _ depth: Int) -> Int {
+        if depth <= 0 { return 1 }
+        var n = 1
+        for child in axGetArrayAttribute(el, kAXChildrenAttribute as String) {
+            n += shallowCount(child, depth - 1)
+        }
+        return n
+    }
+
+    var last = shallowCount(root, 5)
+    let deadline = Date().addingTimeInterval(2.0)
+    while Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.3)
+        let now = shallowCount(root, 5)
+        if now == last { break }  // tree stopped growing
+        last = now
+    }
+}
+
+/// Returns the AX action names supported by an element (e.g. "AXPress").
+func axActionNames(_ element: AXUIElement) -> [String] {
+    var names: CFArray?
+    let result = AXUIElementCopyActionNames(element, &names)
+    guard result == .success, let arr = names as? [String] else { return [] }
+    return arr
+}
+
+/// Whether an element is actionable: it supports AXPress (buttons, checkboxes,
+/// links, menu items, popups) or its value is settable (text fields, sliders).
+/// These are the elements that get a `ref` in a snapshot.
+func isInteractiveElement(_ element: AXUIElement) -> Bool {
+    if axActionNames(element).contains(kAXPressAction as String) {
+        return true
+    }
+    var settable: DarwinBoolean = false
+    let r = AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable)
+    return r == .success && settable.boolValue
+}
+
+/// True if the element is a secure text field (password input). The helper
+/// refuses to type into these regardless of mode — credentials must be supplied
+/// through the secret path, not model-driven typing (SPEC_FREEZE_V0.8 §3/§5).
+func isSecureTextField(_ element: AXUIElement) -> Bool {
+    let role = axGetStringAttribute(element, kAXRoleAttribute as String)
+    let subrole = axGetStringAttribute(element, kAXSubroleAttribute as String)
+    return subrole == "AXSecureTextField" || role == "AXSecureTextField"
+}
+
+/// Returns an app's currently focused UI element, if any.
+func axFocusedElement(_ appElement: AXUIElement) -> AXUIElement? {
+    guard let value = axGetAttribute(appElement, kAXFocusedUIElementAttribute as String),
+        CFGetTypeID(value) == AXUIElementGetTypeID()
+    else { return nil }
+    return (value as! AXUIElement)
+}
+
+/// Shortens an AX role for compact snapshots: strips the `AX` prefix and
+/// lowercases (`AXButton` -> `button`, `AXStaticText` -> `statictext`).
+func shortRole(_ role: String) -> String {
+    let stripped = role.hasPrefix("AX") ? String(role.dropFirst(2)) : role
+    return stripped.lowercased()
 }
 
 // MARK: - Permission Check
@@ -304,14 +400,14 @@ private func traverseTree(
     let role = axGetStringAttribute(element, kAXRoleAttribute as String) ?? "Unknown"
     let currentPath = pathPrefix.isEmpty ? role : "\(pathPrefix)/\(role)"
 
-    // Check if this element matches the selector
-    if currentDepth > 0 { // Skip the root (window) itself
-        if matchesSelector(element: element, selector: selector, role: role) {
-            let metadata = serializeElement(element)
-            var metaWithPath = metadata
-            metaWithPath["path"] = .string(currentPath)
-            results.append(FoundElement(element: element, metadata: metaWithPath, path: currentPath))
-        }
+    // Check if this element matches the selector — including the root itself, so
+    // a selector like {role: "AXWindow"} against a window root can match. (Before,
+    // the root was skipped, making window-targeting selectors silently unmatchable.)
+    if matchesSelector(element: element, selector: selector, role: role, path: currentPath) {
+        let metadata = serializeElement(element)
+        var metaWithPath = metadata
+        metaWithPath["path"] = .string(currentPath)
+        results.append(FoundElement(element: element, metadata: metaWithPath, path: currentPath))
     }
 
     guard results.count < maxResults else { return }
@@ -344,7 +440,20 @@ private func traverseTree(
 }
 
 /// Checks if a single AX element matches all specified selector criteria.
-private func matchesSelector(element: AXUIElement, selector: SelectorParams, role: String) -> Bool {
+private func matchesSelector(
+    element: AXUIElement, selector: SelectorParams, role: String, path: String
+) -> Bool {
+    // A selector with no matchable criteria must match NOTHING, not everything.
+    // (Rust validation rejects such selectors before they reach here; this is
+    // defense-in-depth for direct-driven callers and tests.)
+    guard selector.hasMatchableCriteria else { return false }
+
+    // Path: the element's computed traversal path must END WITH the given path
+    // (e.g. selector "AXButton[2]" matches ".../AXGroup[0]/AXButton[2]").
+    if let sPath = selector.path {
+        guard path.hasSuffix(sPath) else { return false }
+    }
+
     // Role: exact match
     if let sRole = selector.role {
         guard role == sRole else { return false }
@@ -589,7 +698,26 @@ final class ElementRefStore {
     func store(element: AXUIElement, selector: SelectorParams, appName: String) -> String {
         let ref_id = generateRef()
         store[ref_id] = (element: element, selector: selector, appName: appName)
+        evictIfNeeded()
         return ref_id
+    }
+
+    /// Stores an element under a caller-chosen reference id (e.g. a snapshot's
+    /// short `e1`/`e2` handles).
+    func setRef(_ refId: String, element: AXUIElement, selector: SelectorParams, appName: String) {
+        store[refId] = (element: element, selector: selector, appName: appName)
+    }
+
+    /// Bounds the store so long-lived sessions (many `ui.find` calls) cannot grow
+    /// it without limit. Snapshots additionally `clear()` before minting.
+    private func evictIfNeeded() {
+        let cap = 1000
+        if store.count > cap {
+            // Drop an arbitrary chunk; refs are best-effort and callers re-resolve.
+            for key in store.keys.prefix(store.count - cap) {
+                store.removeValue(forKey: key)
+            }
+        }
     }
 
     /// Retrieves an element by reference ID. Returns nil if not found.
@@ -641,4 +769,32 @@ func resolveElementRef(
         code: "ELEMENT_NOT_FOUND",
         message: "Element ref '\(refId)' is stale and no selector provided for fallback"
     )
+}
+
+/// Resolves the target element for an action handler (click/readText/setValue).
+/// Prefers `element_ref` (cached AXUIElement, with selector fallback when stale),
+/// otherwise resolves via `selector` with an implicit wait + disambiguation.
+/// Throws INVALID_PARAMS if neither an element_ref nor a selector is provided.
+func resolveActionTarget(
+    params: [String: JSONValue],
+    app: NSRunningApplication
+) throws -> FoundElement {
+    let appElement = axAppElement(for: app)
+
+    // element_ref path (returns nil only when no element_ref key is present).
+    if let viaRef = try resolveElementRef(params: params, appElement: appElement, windowScope: nil) {
+        return viaRef
+    }
+
+    // Selector path.
+    guard let selector = SelectorParams.parse(from: params) else {
+        throw HelperError(
+            code: "INVALID_PARAMS",
+            message: "Missing required 'selector' or 'element_ref' parameter"
+        )
+    }
+    let waitMs = extractImplicitWaitMs(from: params)
+    let windowElement = try resolveWindow(appElement: appElement, scope: selector.window)
+    let results = try implicitWaitForElement(root: windowElement, selector: selector, waitMs: waitMs)
+    return try disambiguate(results: results, index: selector.index)
 }

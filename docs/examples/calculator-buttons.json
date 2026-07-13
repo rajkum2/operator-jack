@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "Calculator button test",
-  "description": "Opens Calculator, clicks 1 + 2 = and verifies the display shows 3",
+  "description": "Opens Calculator, clicks AC 1 + 2 = and verifies the display shows 3",
   "mode": "unsafe",
   "allow_apps": ["Calculator"],
   "steps": [
@@ -20,11 +20,19 @@
       }
     },
     {
+      "id": "clear",
+      "type": "ui.click",
+      "params": {
+        "app": "Calculator",
+        "selector": { "role": "AXButton", "identifier": "AllClear" }
+      }
+    },
+    {
       "id": "click_1",
       "type": "ui.click",
       "params": {
         "app": "Calculator",
-        "selector": { "role": "AXButton", "name": "1" }
+        "selector": { "role": "AXButton", "identifier": "One" }
       }
     },
     {
@@ -32,7 +40,7 @@
       "type": "ui.click",
       "params": {
         "app": "Calculator",
-        "selector": { "role": "AXButton", "name": "+" }
+        "selector": { "role": "AXButton", "identifier": "Add" }
       }
     },
     {
@@ -40,7 +48,7 @@
       "type": "ui.click",
       "params": {
         "app": "Calculator",
-        "selector": { "role": "AXButton", "name": "2" }
+        "selector": { "role": "AXButton", "identifier": "Two" }
       }
     },
     {
@@ -48,7 +56,7 @@
       "type": "ui.click",
       "params": {
         "app": "Calculator",
-        "selector": { "role": "AXButton", "name": "=" }
+        "selector": { "role": "AXButton", "identifier": "Equals" }
       }
     },
     {
@@ -56,7 +64,7 @@
       "type": "ui.read_text",
       "params": {
         "app": "Calculator",
-        "selector": { "role": "AXStaticText", "identifier": "main display" }
+        "selector": { "role": "AXStaticText", "index": 1 }
       }
     }
   ]

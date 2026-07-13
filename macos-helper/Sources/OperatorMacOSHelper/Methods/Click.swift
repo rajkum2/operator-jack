@@ -15,24 +15,9 @@ import Foundation
 func handleClick(_ params: [String: JSONValue]) throws -> [String: JSONValue] {
     try ensureAccessibility()
     let app = try extractApp(from: params)
-    let appElement = axAppElement(for: app)
 
-    guard let selector = SelectorParams.parse(from: params) else {
-        throw HelperError(code: "INVALID_PARAMS", message: "Missing or invalid 'selector' parameter")
-    }
-
-    let waitMs = extractImplicitWaitMs(from: params)
-    let windowElement = try resolveWindow(appElement: appElement, scope: selector.window)
-
-    // Implicit wait for element
-    let results = try implicitWaitForElement(
-        root: windowElement,
-        selector: selector,
-        waitMs: waitMs
-    )
-
-    // Disambiguate
-    let match = try disambiguate(results: results, index: selector.index)
+    // Resolve target via element_ref (preferred) or selector.
+    let match = try resolveActionTarget(params: params, app: app)
 
     // Check actionability
     if let enabled = axGetBoolAttribute(match.element, kAXEnabledAttribute as String), !enabled {

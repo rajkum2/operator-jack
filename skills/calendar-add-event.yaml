@@ -1,0 +1,40 @@
+schema_version: 1
+name: calendar-add-event
+description: Create a Calendar event via AppleScript (M14 recipe skill). One
+  script call replaces a long chain of fragile UI clicks. Requires Automation
+  (AppleEvents) consent for Calendar on first run.
+version: "1.0.0"
+author: Operator Jack
+
+parameters:
+  - name: summary
+    type: string
+    required: true
+    description: The event title/summary.
+
+  - name: calendar
+    type: string
+    required: false
+    default: Calendar
+    description: The target calendar name.
+
+  - name: duration_minutes
+    type: integer
+    required: false
+    default: 60
+    description: Event length in minutes, starting now.
+
+steps:
+  - id: create_event
+    type: script.applescript
+    params:
+      script: |
+        tell application "Calendar"
+          tell calendar "${calendar}"
+            set startDate to (current date)
+            set endDate to startDate + (${duration_minutes} * minutes)
+            make new event with properties {summary:"${summary}", start date:startDate, end date:endDate}
+          end tell
+        end tell
+        return "created: ${summary}"
+    description: Create the event in the target calendar.

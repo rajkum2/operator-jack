@@ -9,11 +9,13 @@ members = [
     "crates/operator-ipc",
     "crates/operator-planner",
     "crates/operator-skills",
+    "crates/operator-mcp",
+    "crates/operator-agent",
     "crates/operator-cli",
 ]
 
 [workspace.package]
-version = "0.7.0"
+version = "0.17.0"
 edition = "2021"
 license = "MIT"
 

@@ -110,16 +110,16 @@ pub struct ResolvedSkill {
 impl SkillManifest {
     /// Parse a skill manifest from YAML string.
     pub fn from_yaml(yaml: &str) -> Result<Self, SkillError> {
-        let manifest: Self = serde_yaml::from_str(yaml)
-            .map_err(|e| SkillError::ParseError(e.to_string()))?;
+        let manifest: Self =
+            serde_yaml::from_str(yaml).map_err(|e| SkillError::ParseError(e.to_string()))?;
         manifest.validate()?;
         Ok(manifest)
     }
 
     /// Parse a skill manifest from JSON string.
     pub fn from_json(json: &str) -> Result<Self, SkillError> {
-        let manifest: Self = serde_json::from_str(json)
-            .map_err(|e| SkillError::ParseError(e.to_string()))?;
+        let manifest: Self =
+            serde_json::from_str(json).map_err(|e| SkillError::ParseError(e.to_string()))?;
         manifest.validate()?;
         Ok(manifest)
     }
@@ -197,10 +197,7 @@ impl SkillManifest {
     }
 
     /// Resolve parameters with provided values.
-    pub fn resolve(
-        &self,
-        provided: HashMap<String, String>,
-    ) -> Result<ResolvedSkill, SkillError> {
+    pub fn resolve(&self, provided: HashMap<String, String>) -> Result<ResolvedSkill, SkillError> {
         let mut resolved = HashMap::new();
 
         for param_def in &self.parameters {
@@ -256,10 +253,7 @@ impl SkillManifest {
             if !allowed_strings.contains(&value.to_string()) {
                 return Err(SkillError::InvalidParameterValue {
                     name: param_def.name.clone(),
-                    reason: format!(
-                        "Value must be one of: {:?}",
-                        allowed_strings
-                    ),
+                    reason: format!("Value must be one of: {:?}", allowed_strings),
                 });
             }
         }
@@ -284,12 +278,13 @@ impl SkillManifest {
         match param_def.param_type {
             ParameterType::String => Ok(serde_json::Value::String(value.to_string())),
             ParameterType::Integer => {
-                let int_val: i64 = value.parse().map_err(|_| {
-                    SkillError::InvalidParameterValue {
-                        name: param_def.name.clone(),
-                        reason: "Value must be an integer".to_string(),
-                    }
-                })?;
+                let int_val: i64 =
+                    value
+                        .parse()
+                        .map_err(|_| SkillError::InvalidParameterValue {
+                            name: param_def.name.clone(),
+                            reason: "Value must be an integer".to_string(),
+                        })?;
                 Ok(serde_json::Value::Number(int_val.into()))
             }
             ParameterType::Boolean => {
@@ -307,11 +302,9 @@ impl SkillManifest {
             }
             ParameterType::Array | ParameterType::Object => {
                 // Try to parse as JSON
-                serde_json::from_str(value).map_err(|_| {
-                    SkillError::InvalidParameterValue {
-                        name: param_def.name.clone(),
-                        reason: "Value must be valid JSON".to_string(),
-                    }
+                serde_json::from_str(value).map_err(|_| SkillError::InvalidParameterValue {
+                    name: param_def.name.clone(),
+                    reason: "Value must be valid JSON".to_string(),
                 })
             }
         }
@@ -330,17 +323,15 @@ impl ResolvedSkill {
             .iter()
             .map(|skill_step| {
                 // Parse step type
-                let step_type = StepType::from_str(&skill_step.step_type)
-                    .map_err(|e| SkillError::ExpansionError(format!(
+                let step_type = StepType::from_str(&skill_step.step_type).map_err(|e| {
+                    SkillError::ExpansionError(format!(
                         "Invalid step type '{}': {}",
                         skill_step.step_type, e
-                    )))?;
+                    ))
+                })?;
 
                 // Interpolate parameters in params
-                let params_json = interpolate_params(
-                    &skill_step.params,
-                    &self.parameters,
-                )?;
+                let params_json = interpolate_params(&skill_step.params, &self.parameters)?;
 
                 // Parse on_fail
                 let on_fail = skill_step
@@ -376,6 +367,8 @@ impl ResolvedSkill {
             mode: Some(Mode::Safe),
             allow_apps: None,
             allow_domains: None,
+            grants: None,
+            budget: None,
             variables: None,
             steps: steps?,
         })
@@ -388,22 +381,31 @@ fn interpolate_params(
     params: &HashMap<String, serde_json::Value>,
 ) -> Result<serde_json::Value, SkillError> {
     match value {
-        serde_yaml::Value::String(s) => {
-            interpolate_string(s, params)
-        }
+        serde_yaml::Value::String(s) => interpolate_string(s, params),
+        // Preserve the numeric type: an integer literal (e.g. `timeout_ms: 3000`)
+        // must stay a JSON integer, not become `3000.0`. Swift's JSONValue
+        // decodes a double into `.double`, which handlers matching `.int` reject,
+        // silently dropping the value.
         serde_yaml::Value::Number(n) => {
-            Ok(serde_json::Value::Number(
-                serde_json::Number::from_f64(n.as_f64().unwrap_or(0.0))
-                    .unwrap_or_else(|| serde_json::Number::from(0)),
-            ))
+            if let Some(i) = n.as_i64() {
+                Ok(serde_json::Value::Number(serde_json::Number::from(i)))
+            } else if let Some(u) = n.as_u64() {
+                Ok(serde_json::Value::Number(serde_json::Number::from(u)))
+            } else if let Some(f) = n.as_f64() {
+                serde_json::Number::from_f64(f)
+                    .map(serde_json::Value::Number)
+                    .ok_or_else(|| {
+                        SkillError::ExpansionError("non-finite number in skill params".to_string())
+                    })
+            } else {
+                Ok(serde_json::Value::Null)
+            }
         }
         serde_yaml::Value::Bool(b) => Ok(serde_json::Value::Bool(*b)),
         serde_yaml::Value::Null => Ok(serde_json::Value::Null),
         serde_yaml::Value::Sequence(seq) => {
-            let arr: Result<Vec<_>, _> = seq
-                .iter()
-                .map(|v| interpolate_params(v, params))
-                .collect();
+            let arr: Result<Vec<_>, _> =
+                seq.iter().map(|v| interpolate_params(v, params)).collect();
             Ok(serde_json::Value::Array(arr?))
         }
         serde_yaml::Value::Mapping(map) => {
@@ -426,9 +428,25 @@ fn interpolate_string(
     s: &str,
     params: &HashMap<String, serde_json::Value>,
 ) -> Result<serde_json::Value, SkillError> {
-    // Simple interpolation: replace ${param.name} with value
+    // Whole-value substitution: if the string is exactly a single `${name}`
+    // placeholder, return that parameter's typed JSON value (preserving int/bool)
+    // rather than stringifying it. Without this, `timeout_ms: ${wait_ms}` would
+    // become the string "2000", which the helper's `.int`-matching would ignore.
+    let trimmed = s.trim();
+    if trimmed.starts_with("${")
+        && trimmed.ends_with('}')
+        && trimmed.matches("${").count() == 1
+        && !trimmed[2..].contains("${")
+    {
+        let name = &trimmed[2..trimmed.len() - 1];
+        if let Some(value) = params.get(name) {
+            return Ok(value.clone());
+        }
+    }
+
+    // Otherwise: string interpolation, stringifying embedded values.
     let mut result = s.to_string();
-    
+
     for (name, value) in params {
         let placeholder = format!("${{{}}}", name);
         let replacement = match value {
@@ -450,14 +468,16 @@ fn interpolate_string(
 }
 
 fn is_kebab_case(s: &str) -> bool {
-    s.chars().all(|c| c.is_lowercase() || c == '-' || c.is_numeric())
+    s.chars()
+        .all(|c| c.is_lowercase() || c == '-' || c.is_numeric())
         && !s.starts_with('-')
         && !s.ends_with('-')
         && !s.contains("--")
 }
 
 fn is_snake_case(s: &str) -> bool {
-    s.chars().all(|c| c.is_lowercase() || c == '_' || c.is_numeric())
+    s.chars()
+        .all(|c| c.is_lowercase() || c == '_' || c.is_numeric())
         && !s.starts_with('_')
         && !s.ends_with('_')
         && !s.contains("__")
@@ -522,11 +542,104 @@ steps:
         let manifest = SkillManifest::from_yaml(yaml).unwrap();
         let mut params = HashMap::new();
         params.insert("message".to_string(), "hello".to_string());
-        
+
         let resolved = manifest.resolve(params).unwrap();
         assert_eq!(
             resolved.parameters.get("message").unwrap(),
             &serde_json::Value::String("hello".to_string())
+        );
+    }
+
+    #[test]
+    fn test_integer_literal_step_param_stays_integer() {
+        // A literal `timeout_ms: 3000` must expand to a JSON integer, not 3000.0
+        // (the helper matches `.int` and would silently drop a double).
+        let yaml = r#"
+schema_version: 1
+name: int-literal
+parameters: []
+steps:
+  - id: wait
+    type: ui.wait_for
+    params:
+      app: Notes
+      selector:
+        role: AXWindow
+      timeout_ms: 3000
+"#;
+        let manifest = SkillManifest::from_yaml(yaml).unwrap();
+        let plan = manifest.resolve(HashMap::new()).unwrap().to_plan().unwrap();
+        let timeout = plan.steps[0].params.get("timeout_ms").unwrap();
+        assert!(
+            timeout.is_i64() || timeout.is_u64(),
+            "expected integer, got {timeout}"
+        );
+        assert_eq!(timeout.as_i64(), Some(3000));
+    }
+
+    #[test]
+    fn test_integer_param_interpolation_stays_integer() {
+        // `timeout_ms: ${wait_ms}` where wait_ms is an integer param must expand
+        // to a JSON integer via whole-value substitution, not the string "2000".
+        let yaml = r#"
+schema_version: 1
+name: int-param
+parameters:
+  - name: wait_ms
+    type: integer
+    required: false
+    default: 2000
+steps:
+  - id: wait
+    type: ui.wait_for
+    params:
+      app: Notes
+      selector:
+        role: AXWindow
+      timeout_ms: ${wait_ms}
+"#;
+        let manifest = SkillManifest::from_yaml(yaml).unwrap();
+
+        // Default value path.
+        let plan = manifest.resolve(HashMap::new()).unwrap().to_plan().unwrap();
+        assert_eq!(
+            plan.steps[0].params.get("timeout_ms").unwrap().as_i64(),
+            Some(2000)
+        );
+
+        // Provided value path.
+        let mut params = HashMap::new();
+        params.insert("wait_ms".to_string(), "500".to_string());
+        let plan = manifest.resolve(params).unwrap().to_plan().unwrap();
+        assert_eq!(
+            plan.steps[0].params.get("timeout_ms").unwrap().as_i64(),
+            Some(500)
+        );
+    }
+
+    #[test]
+    fn test_string_interpolation_still_stringifies_embedded() {
+        // A placeholder embedded in surrounding text stays a string.
+        let yaml = r#"
+schema_version: 1
+name: embed
+parameters:
+  - name: name
+    type: string
+    required: true
+steps:
+  - id: set
+    type: sys.clipboard_set
+    params:
+      text: "Hello, ${name}!"
+"#;
+        let manifest = SkillManifest::from_yaml(yaml).unwrap();
+        let mut params = HashMap::new();
+        params.insert("name".to_string(), "world".to_string());
+        let plan = manifest.resolve(params).unwrap().to_plan().unwrap();
+        assert_eq!(
+            plan.steps[0].params.get("text").unwrap(),
+            &serde_json::Value::String("Hello, world!".to_string())
         );
     }
 }

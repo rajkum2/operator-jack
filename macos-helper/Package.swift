@@ -14,5 +14,10 @@ let package = Package(
                 .linkedFramework("AppKit"),
             ]
         ),
+        .testTarget(
+            name: "OperatorMacOSHelperTests",
+            dependencies: ["operator-macos-helper"],
+            path: "Tests/OperatorMacOSHelperTests"
+        ),
     ]
 )

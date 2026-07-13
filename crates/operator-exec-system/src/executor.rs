@@ -1,8 +1,8 @@
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
-use std::process::Command;
-use std::time::Instant;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use operator_core::types::StepType;
 use serde_json::{json, Value};
@@ -19,6 +19,8 @@ pub enum SystemExecError {
     MissingParam(String),
     #[error("Execution failed: {0}")]
     ExecFailed(String),
+    #[error("Timed out: {0}")]
+    Timeout(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -32,6 +34,18 @@ const CAPTURE_CAP: usize = 1_048_576;
 
 /// Execute a system-lane step. Returns the output JSON on success.
 pub fn execute_system_step(step_type: &StepType, params: &Value) -> Result<Value, SystemExecError> {
+    execute_system_step_with_timeout(step_type, params, None)
+}
+
+/// Execute a system-lane step, enforcing `exec_timeout_ms` on `sys.exec` (the
+/// only step that can run an arbitrary long-lived child). On timeout the child
+/// process is killed, rather than being left to run orphaned after the engine's
+/// worker thread gives up. `None` means no in-handler deadline.
+pub fn execute_system_step_with_timeout(
+    step_type: &StepType,
+    params: &Value,
+    exec_timeout_ms: Option<u64>,
+) -> Result<Value, SystemExecError> {
     let start = Instant::now();
 
     let result = match step_type {
@@ -45,9 +59,16 @@ pub fn execute_system_step(step_type: &StepType, params: &Value) -> Result<Value
         StepType::SysMovePath => exec_move_path(params),
         StepType::SysCopyPath => exec_copy_path(params),
         StepType::SysDeletePath => exec_delete_path(params),
-        StepType::SysExec => exec_command(params),
+        StepType::SysExec => exec_command(params, exec_timeout_ms),
         StepType::SysClipboardGet => exec_clipboard_get(),
         StepType::SysClipboardSet => exec_clipboard_set(params),
+        StepType::SysListDir => exec_list_dir(params),
+        StepType::DataParseCsv => exec_parse_csv(params),
+        StepType::DataParseJson => exec_parse_json(params),
+        StepType::HttpRequest => exec_http_request(params),
+        StepType::ScriptApplescript => exec_osascript(params, "AppleScript", exec_timeout_ms),
+        StepType::ScriptJxa => exec_osascript(params, "JavaScript", exec_timeout_ms),
+        StepType::ShortcutsRun => exec_shortcuts_run(params, exec_timeout_ms),
         _ => Err(SystemExecError::UnsupportedStep(step_type.to_string())),
     };
 
@@ -349,7 +370,7 @@ fn exec_delete_path(params: &Value) -> Result<Value, SystemExecError> {
 }
 
 /// sys.exec — direct exec via std::process::Command (no shell)
-fn exec_command(params: &Value) -> Result<Value, SystemExecError> {
+fn exec_command(params: &Value, timeout_ms: Option<u64>) -> Result<Value, SystemExecError> {
     let command = require_str(params, "command")?;
     let args: Vec<String> = params
         .get("args")
@@ -382,6 +403,8 @@ fn exec_command(params: &Value) -> Result<Value, SystemExecError> {
     let mut cmd = Command::new(command);
     cmd.args(&args);
     cmd.current_dir(&cwd);
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
 
     // Environment handling
     if env_clean {
@@ -395,17 +418,66 @@ fn exec_command(params: &Value) -> Result<Value, SystemExecError> {
         }
     }
 
-    let output = cmd.output()?;
-    let exit_code = output.status.code().unwrap_or(-1);
+    let mut child = cmd.spawn()?;
 
-    let stdout_bytes = output.stdout.len();
-    let stderr_bytes = output.stderr.len();
+    // Drain stdout/stderr on separate threads so a chatty child cannot deadlock
+    // by filling a pipe buffer while we are waiting for it to exit.
+    let mut out_pipe = child.stdout.take();
+    let mut err_pipe = child.stderr.take();
+    let out_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(ref mut p) = out_pipe {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let err_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(ref mut p) = err_pipe {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    // Wait for exit, enforcing the deadline if one was given. On timeout the
+    // child is killed so it does not keep running after the step is abandoned.
+    let status = match timeout_ms {
+        Some(ms) => {
+            let deadline = Instant::now() + Duration::from_millis(ms);
+            loop {
+                match child.try_wait()? {
+                    Some(status) => break status,
+                    None => {
+                        if Instant::now() >= deadline {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            // Killing closes the pipes, so the reader threads finish.
+                            let _ = out_reader.join();
+                            let _ = err_reader.join();
+                            return Err(SystemExecError::Timeout(format!(
+                                "command '{command}' did not complete within {ms}ms and was killed"
+                            )));
+                        }
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                }
+            }
+        }
+        None => child.wait()?,
+    };
+
+    let stdout_vec = out_reader.join().unwrap_or_default();
+    let stderr_vec = err_reader.join().unwrap_or_default();
+    let exit_code = status.code().unwrap_or(-1);
+
+    let stdout_bytes = stdout_vec.len();
+    let stderr_bytes = stderr_vec.len();
 
     // Apply 1 MiB capture cap.
     let truncated = stdout_bytes > CAPTURE_CAP || stderr_bytes > CAPTURE_CAP;
 
-    let stdout_raw = &output.stdout[..stdout_bytes.min(CAPTURE_CAP)];
-    let stderr_raw = &output.stderr[..stderr_bytes.min(CAPTURE_CAP)];
+    let stdout_raw = &stdout_vec[..stdout_bytes.min(CAPTURE_CAP)];
+    let stderr_raw = &stderr_vec[..stderr_bytes.min(CAPTURE_CAP)];
 
     let mut stdout_str = String::from_utf8_lossy(stdout_raw).to_string();
     let mut stderr_str = String::from_utf8_lossy(stderr_raw).to_string();
@@ -417,7 +489,7 @@ fn exec_command(params: &Value) -> Result<Value, SystemExecError> {
         stderr_str.push_str(&format!("\n[TRUNCATED after {} bytes]", CAPTURE_CAP));
     }
 
-    if !output.status.success() {
+    if !status.success() {
         tracing::warn!(
             command = %command,
             exit_code = exit_code,
@@ -483,6 +555,284 @@ fn exec_clipboard_set(params: &Value) -> Result<Value, SystemExecError> {
 }
 
 // ---------------------------------------------------------------------------
+// M13: data / network / list_dir handlers
+// ---------------------------------------------------------------------------
+
+/// Reads the input for a data.* step from either an inline `text` param or a
+/// `path` param (file). Exactly one is expected.
+fn read_text_or_file(params: &Value) -> Result<String, SystemExecError> {
+    if let Some(text) = params.get("text").and_then(|v| v.as_str()) {
+        return Ok(text.to_string());
+    }
+    if let Some(path) = params.get("path").and_then(|v| v.as_str()) {
+        let path = expand_tilde(path);
+        return std::fs::read_to_string(&path).map_err(SystemExecError::Io);
+    }
+    Err(SystemExecError::MissingParam("text or path".to_string()))
+}
+
+/// `sys.list_dir`: list a directory, optionally filtered by a glob `pattern`
+/// (matched against entry names), with per-entry metadata.
+fn exec_list_dir(params: &Value) -> Result<Value, SystemExecError> {
+    let path = expand_tilde(require_str(params, "path")?);
+    let pattern = params
+        .get("pattern")
+        .and_then(|v| v.as_str())
+        .map(glob::Pattern::new)
+        .transpose()
+        .map_err(|e| SystemExecError::ExecFailed(format!("invalid glob pattern: {e}")))?;
+
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(&path)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if let Some(ref pat) = pattern {
+            if !pat.matches(&name) {
+                continue;
+            }
+        }
+        let meta = entry.metadata().ok();
+        let (is_dir, size, modified) = match meta {
+            Some(m) => {
+                let modified = m
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs());
+                (m.is_dir(), m.len(), modified)
+            }
+            None => (false, 0, None),
+        };
+        entries.push(json!({
+            "name": name,
+            "path": entry.path().to_string_lossy(),
+            "is_dir": is_dir,
+            "size": size,
+            "modified_epoch": modified,
+        }));
+    }
+    // Deterministic order (readdir order is unspecified).
+    entries.sort_by(|a, b| {
+        a["name"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["name"].as_str().unwrap_or(""))
+    });
+    tracing::info!(path = %path, count = entries.len(), "sys.list_dir");
+    Ok(json!({ "count": entries.len(), "entries": entries }))
+}
+
+/// `data.parse_csv`: parse CSV → array of row objects (keyed by header) when
+/// `headers` (default true), else array of arrays. Handles quoted fields,
+/// embedded commas/quotes ("" escape), and CRLF.
+fn exec_parse_csv(params: &Value) -> Result<Value, SystemExecError> {
+    let text = read_text_or_file(params)?;
+    let with_headers = params
+        .get("headers")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+
+    let rows = parse_csv(&text);
+    if rows.is_empty() {
+        return Ok(json!({ "count": 0, "rows": [] }));
+    }
+
+    let out = if with_headers {
+        let header = &rows[0];
+        let records: Vec<Value> = rows[1..]
+            .iter()
+            .map(|row| {
+                let obj: serde_json::Map<String, Value> = header
+                    .iter()
+                    .enumerate()
+                    .map(|(i, key)| {
+                        (
+                            key.clone(),
+                            Value::String(row.get(i).cloned().unwrap_or_default()),
+                        )
+                    })
+                    .collect();
+                Value::Object(obj)
+            })
+            .collect();
+        json!({ "count": records.len(), "headers": header, "rows": records })
+    } else {
+        let records: Vec<Value> = rows
+            .iter()
+            .map(|row| Value::Array(row.iter().map(|c| Value::String(c.clone())).collect()))
+            .collect();
+        json!({ "count": records.len(), "rows": records })
+    };
+    Ok(out)
+}
+
+/// A small, dependency-free RFC-4180-ish CSV parser (quotes, "" escape, CRLF).
+fn parse_csv(text: &str) -> Vec<Vec<String>> {
+    let mut rows = Vec::new();
+    let mut row = Vec::new();
+    let mut field = String::new();
+    let mut in_quotes = false;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_quotes {
+            match c {
+                '"' if chars.peek() == Some(&'"') => {
+                    field.push('"');
+                    chars.next();
+                }
+                '"' => in_quotes = false,
+                _ => field.push(c),
+            }
+        } else {
+            match c {
+                '"' => in_quotes = true,
+                ',' => {
+                    row.push(std::mem::take(&mut field));
+                }
+                '\r' => { /* swallow; \n ends the row */ }
+                '\n' => {
+                    row.push(std::mem::take(&mut field));
+                    rows.push(std::mem::take(&mut row));
+                }
+                _ => field.push(c),
+            }
+        }
+    }
+    // Final field/row if the text doesn't end in a newline.
+    if !field.is_empty() || !row.is_empty() {
+        row.push(field);
+        rows.push(row);
+    }
+    // Drop a trailing empty row (e.g. file ending in a newline).
+    if rows
+        .last()
+        .map(|r| r.len() == 1 && r[0].is_empty())
+        .unwrap_or(false)
+    {
+        rows.pop();
+    }
+    rows
+}
+
+/// `data.parse_json`: parse JSON, optionally selecting a sub-value via a JSON
+/// pointer (RFC 6901, e.g. "/results/0/name").
+fn exec_parse_json(params: &Value) -> Result<Value, SystemExecError> {
+    let text = read_text_or_file(params)?;
+    let value: Value = serde_json::from_str(&text)
+        .map_err(|e| SystemExecError::ExecFailed(format!("invalid JSON: {e}")))?;
+    let selected = match params.get("pointer").and_then(|v| v.as_str()) {
+        Some(ptr) if !ptr.is_empty() => value
+            .pointer(ptr)
+            .cloned()
+            .ok_or_else(|| SystemExecError::ExecFailed(format!("JSON pointer not found: {ptr}")))?,
+        _ => value,
+    };
+    Ok(json!({ "value": selected }))
+}
+
+/// `http.request`: a blocking HTTP request. Domain gating is enforced upstream by
+/// the policy gate (this handler assumes the URL is already allowed).
+fn exec_http_request(params: &Value) -> Result<Value, SystemExecError> {
+    let url = require_str(params, "url")?;
+    let method = params
+        .get("method")
+        .and_then(|v| v.as_str())
+        .unwrap_or("GET")
+        .to_uppercase();
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent("operator-jack")
+        .build()
+        .map_err(|e| SystemExecError::ExecFailed(format!("http client: {e}")))?;
+
+    let m = reqwest::Method::from_bytes(method.as_bytes())
+        .map_err(|e| SystemExecError::ExecFailed(format!("bad method: {e}")))?;
+    let mut req = client.request(m, url);
+
+    if let Some(headers) = params.get("headers").and_then(|v| v.as_object()) {
+        for (k, v) in headers {
+            if let Some(vs) = v.as_str() {
+                req = req.header(k.as_str(), vs);
+            }
+        }
+    }
+    if let Some(body) = params.get("body") {
+        match body {
+            Value::String(s) => req = req.body(s.clone()),
+            other => req = req.json(other),
+        }
+    }
+
+    let resp = req
+        .send()
+        .map_err(|e| SystemExecError::ExecFailed(format!("http request failed: {e}")))?;
+    let status = resp.status().as_u16();
+    let resp_headers: serde_json::Map<String, Value> = resp
+        .headers()
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.to_string(),
+                Value::String(v.to_str().unwrap_or("").to_string()),
+            )
+        })
+        .collect();
+    // Cap the captured body to avoid unbounded memory / audit bloat.
+    let text = resp.text().unwrap_or_default();
+    let capped: String = text.chars().take(CAPTURE_CAP).collect();
+    tracing::info!(url = %url, status, "http.request");
+    Ok(json!({
+        "status": status,
+        "ok": (200..300).contains(&status),
+        "headers": resp_headers,
+        "body": capped,
+        "truncated": text.len() > capped.len(),
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// M14: script lane (AppleScript / JXA / Shortcuts) — via osascript/shortcuts
+// ---------------------------------------------------------------------------
+
+/// `script.applescript` / `script.jxa`: run a script through `osascript`,
+/// reusing `exec_command`'s timeout + output capture. `language` is
+/// "AppleScript" or "JavaScript" (JXA). The script body is passed as a single
+/// `-e` argument (multi-line scripts are fine).
+fn exec_osascript(
+    params: &Value,
+    language: &str,
+    timeout_ms: Option<u64>,
+) -> Result<Value, SystemExecError> {
+    let script = require_str(params, "script")?;
+    tracing::info!(language = %language, "script.{}", language.to_lowercase());
+    let exec_params = json!({
+        "command": "osascript",
+        "args": ["-l", language, "-e", script],
+    });
+    let mut out = exec_command(&exec_params, timeout_ms)?;
+    if let Some(obj) = out.as_object_mut() {
+        obj.insert("language".to_string(), json!(language));
+    }
+    Ok(out)
+}
+
+/// `shortcuts.run`: run a macOS Shortcut by name via the `shortcuts` CLI. An
+/// `input_path` (file) is passed through if given; inline text input is out of
+/// scope (most shortcuts take input from the clipboard/selection).
+fn exec_shortcuts_run(params: &Value, timeout_ms: Option<u64>) -> Result<Value, SystemExecError> {
+    let name = require_str(params, "name")?;
+    tracing::info!(shortcut = %name, "shortcuts.run");
+    let mut args = vec![json!("run"), json!(name)];
+    if let Some(input_path) = params.get("input_path").and_then(|v| v.as_str()) {
+        args.push(json!("--input-path"));
+        args.push(json!(expand_tilde(input_path)));
+    }
+    let exec_params = json!({ "command": "shortcuts", "args": args });
+    exec_command(&exec_params, timeout_ms)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -496,6 +846,25 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("operator_test_{}", ulid::Ulid::new()));
         fs::create_dir_all(&dir).expect("create test dir");
         dir
+    }
+
+    #[test]
+    fn test_parse_csv_quoting_and_headers() {
+        // Quoted field with an embedded comma, and a "" escaped quote.
+        let text = "name,note\nAlpha,\"a, b\"\nBeta,\"say \"\"hi\"\"\"\n";
+        let params = json!({ "text": text });
+        let out = exec_parse_csv(&params).unwrap();
+        assert_eq!(out["count"], 2);
+        assert_eq!(out["rows"][0]["name"], "Alpha");
+        assert_eq!(out["rows"][0]["note"], "a, b");
+        assert_eq!(out["rows"][1]["note"], "say \"hi\"");
+    }
+
+    #[test]
+    fn test_parse_json_pointer() {
+        let params = json!({ "text": "{\"a\":{\"b\":[10,20]}}", "pointer": "/a/b/1" });
+        let out = exec_parse_json(&params).unwrap();
+        assert_eq!(out["value"], 20);
     }
 
     #[test]
@@ -728,7 +1097,7 @@ mod tests {
             "command": "echo",
             "args": ["hello", "world"]
         });
-        let result = exec_command(&params).unwrap();
+        let result = exec_command(&params, None).unwrap();
 
         assert_eq!(result["exit_code"], 0);
         assert_eq!(result["stdout"].as_str().unwrap().trim(), "hello world");
@@ -741,7 +1110,7 @@ mod tests {
             "command": "pwd",
             "cwd": "/tmp"
         });
-        let result = exec_command(&params).unwrap();
+        let result = exec_command(&params, None).unwrap();
 
         // /tmp may resolve to /private/tmp on macOS
         let stdout = result["stdout"].as_str().unwrap().trim();
@@ -759,7 +1128,7 @@ mod tests {
             "args": ["-c", "echo $MY_TEST_VAR"],
             "env": { "MY_TEST_VAR": "operator_test_value" }
         });
-        let result = exec_command(&params).unwrap();
+        let result = exec_command(&params, None).unwrap();
 
         assert_eq!(
             result["stdout"].as_str().unwrap().trim(),
@@ -774,7 +1143,7 @@ mod tests {
             "env_clean": true,
             "env": { "ONLY_THIS": "yes" }
         });
-        let result = exec_command(&params).unwrap();
+        let result = exec_command(&params, None).unwrap();
 
         let stdout = result["stdout"].as_str().unwrap();
         assert!(stdout.contains("ONLY_THIS=yes"));
@@ -788,9 +1157,28 @@ mod tests {
             "command": "sh",
             "args": ["-c", "exit 42"]
         });
-        let result = exec_command(&params).unwrap();
+        let result = exec_command(&params, None).unwrap();
 
         assert_eq!(result["exit_code"], 42);
+    }
+
+    #[test]
+    fn test_exec_times_out_and_kills_child() {
+        // A 10s sleep with a 300ms deadline must return a Timeout error promptly
+        // (the child is killed), not block for the full sleep duration.
+        let params = json!({ "command": "sleep", "args": ["10"] });
+        let start = Instant::now();
+        let result = exec_command(&params, Some(300));
+        let elapsed = start.elapsed();
+
+        assert!(
+            matches!(result, Err(SystemExecError::Timeout(_))),
+            "expected Timeout, got {result:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "should return near the 300ms deadline, took {elapsed:?}"
+        );
     }
 
     #[test]

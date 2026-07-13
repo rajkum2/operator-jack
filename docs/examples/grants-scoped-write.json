@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "Grant-scoped write",
+  "description": "Demonstrates M8 task-scoped grants: this run may only write under ~/operator-scratch/ (a write elsewhere is denied with exit code 3).",
+  "mode": "unsafe",
+  "grants": { "fs_write": ["~/operator-scratch/**"] },
+  "budget": { "max_steps": 10, "max_wall_ms": 60000 },
+  "steps": [
+    { "id": "mkdir", "type": "sys.mkdir", "params": { "path": "~/operator-scratch", "parents": true } },
+    { "id": "write", "type": "sys.write_file", "params": { "path": "~/operator-scratch/hello.txt", "content": "written within the fs_write grant" } }
+  ]
+}

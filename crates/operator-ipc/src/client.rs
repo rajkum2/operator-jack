@@ -1,11 +1,17 @@
 use std::io::BufReader;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use crate::framing::{read_ndjson_line, write_ndjson_line};
 use crate::protocol::{IpcRequest, IpcResponse};
 use crate::IpcError;
+
+/// Read timeout for the connect handshake and for `send()` calls that don't
+/// specify their own. UI steps pass an explicit, step-derived timeout via
+/// `send_with_timeout`.
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A client for communicating with the macOS accessibility helper process.
 ///
@@ -71,7 +77,7 @@ impl HelperClient {
         self.reader = Some(BufReader::new(stdout));
 
         // Perform handshake: send ui.ping, validate protocol_version.
-        let ping_result = self.send_raw("ui.ping", serde_json::json!({}))?;
+        let ping_result = self.send_raw("ui.ping", serde_json::json!({}), DEFAULT_READ_TIMEOUT)?;
 
         let protocol_version = ping_result
             .get("protocol_version")
@@ -112,15 +118,31 @@ impl HelperClient {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, IpcError> {
-        let ipc_method = translate_method_name(method);
-        self.send_raw(&ipc_method, params)
+        self.send_with_timeout(method, params, DEFAULT_READ_TIMEOUT)
     }
 
-    /// Sends a raw IPC request (method name already in IPC format).
+    /// Like [`send`], but bounds the time spent waiting for the helper's
+    /// response. If the helper does not reply within `timeout`, the helper is
+    /// killed (unblocking the read) and `IpcError::Timeout` is returned; the
+    /// next request reconnects. This prevents a hung helper from blocking a run
+    /// indefinitely.
+    pub fn send_with_timeout(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+        timeout: Duration,
+    ) -> Result<serde_json::Value, IpcError> {
+        let ipc_method = translate_method_name(method);
+        self.send_raw(&ipc_method, params, timeout)
+    }
+
+    /// Sends a raw IPC request (method name already in IPC format) with a read
+    /// timeout.
     fn send_raw(
         &mut self,
         method: &str,
         params: serde_json::Value,
+        timeout: Duration,
     ) -> Result<serde_json::Value, IpcError> {
         // Check if helper process is still alive.
         self.check_alive()?;
@@ -134,11 +156,7 @@ impl HelperClient {
             .ok_or_else(|| IpcError::HelperCrashed("Helper stdin not available".into()))?;
         write_ndjson_line(stdin, &request)?;
 
-        let reader = self
-            .reader
-            .as_mut()
-            .ok_or_else(|| IpcError::HelperCrashed("Helper stdout not available".into()))?;
-        let response: IpcResponse = read_ndjson_line(reader)?;
+        let response: IpcResponse = self.read_response_with_timeout(timeout)?;
 
         // Validate response id matches request id.
         if response.id != request_id {
@@ -166,6 +184,56 @@ impl HelperClient {
             Err(IpcError::InvalidResponse(
                 "Response has ok=false but no error payload".into(),
             ))
+        }
+    }
+
+    /// Reads one NDJSON response, bounded by `timeout`.
+    ///
+    /// A child-process pipe has no read deadline, so the blocking read runs on a
+    /// scratch thread that owns the reader and hands it back over a channel. On
+    /// timeout the helper is killed — which closes its stdout, unblocking (and
+    /// ending) the detached reader thread — and the connection is torn down so
+    /// the next request reconnects.
+    fn read_response_with_timeout(&mut self, timeout: Duration) -> Result<IpcResponse, IpcError> {
+        let mut reader = self
+            .reader
+            .take()
+            .ok_or_else(|| IpcError::HelperCrashed("Helper stdout not available".into()))?;
+
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let result = read_ndjson_line::<_, IpcResponse>(&mut reader);
+            // If the receiver has already timed out and gone away, this send
+            // fails harmlessly and the thread just drops the reader.
+            let _ = tx.send((reader, result));
+        });
+
+        match rx.recv_timeout(timeout) {
+            Ok((reader, result)) => {
+                // Restore the reader for the next request.
+                self.reader = Some(reader);
+                result
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Helper is hung: kill it to unblock the detached reader thread
+                // and force a clean reconnect on the next request.
+                if let Some(mut child) = self.child.take() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                self.stdin = None;
+                Err(IpcError::Timeout(timeout.as_millis() as u64))
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                if let Some(mut child) = self.child.take() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                self.stdin = None;
+                Err(IpcError::HelperCrashed(
+                    "Helper reader thread ended unexpectedly".into(),
+                ))
+            }
         }
     }
 
@@ -246,6 +314,7 @@ impl Drop for HelperClient {
 fn translate_method_name(step_type_str: &str) -> String {
     match step_type_str {
         "ui.check_accessibility_permission" => "ui.checkAccessibilityPermission".to_string(),
+        "ui.check_screen_recording_permission" => "ui.checkScreenRecordingPermission".to_string(),
         "ui.list_apps" => "ui.listApps".to_string(),
         "ui.focus_app" => "ui.focusApp".to_string(),
         "ui.set_value" => "ui.setValue".to_string(),
@@ -256,8 +325,10 @@ fn translate_method_name(step_type_str: &str) -> String {
         "ui.select_menu" => "ui.selectMenu".to_string(),
         "ui.list_windows" => "ui.listWindows".to_string(),
         "ui.focus_window" => "ui.focusWindow".to_string(),
-        // These are already the same in both conventions.
-        "ui.find" | "ui.click" | "ui.ping" => step_type_str.to_string(),
+        // These are already the same in both conventions (single-word verbs).
+        "ui.find" | "ui.click" | "ui.ping" | "ui.snapshot" | "ui.screenshot" | "ui.scroll" => {
+            step_type_str.to_string()
+        }
         // Unknown method — pass through as-is.
         other => other.to_string(),
     }
@@ -289,6 +360,7 @@ mod tests {
         assert_eq!(translate_method_name("ui.find"), "ui.find");
         assert_eq!(translate_method_name("ui.click"), "ui.click");
         assert_eq!(translate_method_name("ui.ping"), "ui.ping");
+        assert_eq!(translate_method_name("ui.scroll"), "ui.scroll");
 
         // Unknown method — pass through
         assert_eq!(translate_method_name("custom.method"), "custom.method");

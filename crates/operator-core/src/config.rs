@@ -37,6 +37,14 @@ pub struct OperatorConfig {
     #[serde(default)]
     pub allow_domains: Vec<String>,
 
+    /// Default task-scoped capability grants (M8). None = unrestricted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grants: Option<crate::grants::Grants>,
+
+    /// Default whole-run resource budget (M8). None = unbounded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<crate::grants::RunBudget>,
+
     /// Custom log directory.
     pub log_dir: Option<String>,
 
@@ -107,6 +115,8 @@ impl Default for OperatorConfig {
             default_retry_backoff_ms: 1_000,
             allow_apps: Vec::new(),
             allow_domains: Vec::new(),
+            grants: None,
+            budget: None,
             log_dir: None,
             db_path: None,
             default_provider: "ollama".to_string(),
@@ -228,7 +238,7 @@ default_provider = "ollama"
 # timeout_seconds = 60
 
 [planner.anthropic]
-# model = "claude-3-haiku-20240307"
+# model = "claude-haiku-4-5-20251001"
 # base_url = "https://api.anthropic.com/v1"
 # max_tokens = 4096
 # temperature = 0.2

@@ -46,14 +46,32 @@ func handleWaitFor(_ params: [String: JSONValue]) throws -> [String: JSONValue] 
         expectedValue = nil
     }
 
-    let windowElement = try resolveWindow(appElement: appElement, scope: selector.window)
     let maxDepth = selector.maxDepth ?? 12
+    let hasAnyOf = selector.anyOf != nil && !(selector.anyOf!.isEmpty)
     let pollIntervalMs = 200
     let maxIterations = max(1, timeoutMs / pollIntervalMs)
     let startTime = DispatchTime.now()
 
     for i in 0..<maxIterations {
-        let results = findElements(root: windowElement, selector: selector, maxDepth: maxDepth, maxResults: 1)
+        // Resolve the window inside the loop: the app may not have opened its
+        // window yet, and wait_for should poll for it rather than fail instantly
+        // with WINDOW_NOT_FOUND on the first attempt.
+        let windowElement = try? resolveWindow(appElement: appElement, scope: selector.window)
+
+        // Gather matches. When an index is requested we must collect enough
+        // candidates for findElements' index post-filter (it applies index AFTER
+        // truncating to maxResults), so a maxResults of 1 would make index>=1
+        // never match.
+        var results: [FoundElement] = []
+        if let windowElement = windowElement {
+            if hasAnyOf {
+                results = resolveAnyOf(root: windowElement, alternatives: selector.anyOf!, maxResults: 100)
+            } else {
+                let maxResults = selector.index != nil ? 100 : 1
+                results = findElements(
+                    root: windowElement, selector: selector, maxDepth: maxDepth, maxResults: maxResults)
+            }
+        }
 
         if let match = results.first {
             let conditionMet: Bool

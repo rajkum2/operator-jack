@@ -27,6 +27,9 @@ reqwest = { version = "0.11", features = ["json"] }
 # URL parsing
 url = "2"
 
+# App data dir resolution (isolated browser profiles)
+dirs = "5"
+
 # Base64 for screenshots
 base64 = "0.22"
 

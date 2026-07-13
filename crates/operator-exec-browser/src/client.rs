@@ -128,9 +128,9 @@ impl BrowserClient {
 
         // Send the request
         let msg = Message::Text(serde_json::to_string(&request)?);
-        self.sender.send(msg).map_err(|_| {
-            BrowserError::ConnectionError("Failed to send message".to_string())
-        })?;
+        self.sender
+            .send(msg)
+            .map_err(|_| BrowserError::ConnectionError("Failed to send message".to_string()))?;
 
         debug!("Sent CDP request {}: {}", id, request.method);
 
@@ -279,12 +279,7 @@ pub async fn discover_chrome_ws_url(port: u16) -> Result<String, BrowserError> {
 
     // Get list of targets
     let targets_url = format!("http://127.0.0.1:{}/json/list", port);
-    let targets: Vec<DebuggerTarget> = client
-        .get(&targets_url)
-        .send()
-        .await?
-        .json()
-        .await?;
+    let targets: Vec<DebuggerTarget> = client.get(&targets_url).send().await?.json().await?;
 
     // Find the first page target
     for target in targets {
@@ -298,11 +293,30 @@ pub async fn discover_chrome_ws_url(port: u16) -> Result<String, BrowserError> {
     ))
 }
 
-/// Launch Chrome with remote debugging enabled.
-pub async fn launch_chrome(port: u16) -> Result<tokio::process::Child, BrowserError> {
+/// Launch Chrome with remote debugging enabled, in an **isolated** profile.
+///
+/// `user_data_dir` MUST be operator-owned (an ephemeral per-run dir, or a named
+/// persistent profile under the app data dir) — never the user's real Chrome
+/// profile. Passing `--user-data-dir` is what keeps the launched browser off the
+/// user's logged-in session (M12 isolation). `headless` toggles `--headless=new`
+/// (headed is needed for `human_takeover` logins).
+pub async fn launch_chrome(
+    port: u16,
+    user_data_dir: &std::path::Path,
+    headless: bool,
+) -> Result<tokio::process::Child, BrowserError> {
     use std::process::Stdio;
 
-    info!("Launching Chrome with remote debugging on port {}", port);
+    info!(
+        "Launching isolated Chrome on port {} (profile: {}, headless: {})",
+        port,
+        user_data_dir.display(),
+        headless
+    );
+
+    std::fs::create_dir_all(user_data_dir).map_err(|e| {
+        BrowserError::ConnectionError(format!("failed to create user-data-dir: {e}"))
+    })?;
 
     let chrome_paths = vec![
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -318,18 +332,22 @@ pub async fn launch_chrome(port: u16) -> Result<tokio::process::Child, BrowserEr
 
     let mut cmd = tokio::process::Command::new(chrome_path);
     cmd.arg(format!("--remote-debugging-port={}", port))
+        // Isolation: a dedicated profile dir keeps us off the user's session.
+        .arg(format!("--user-data-dir={}", user_data_dir.display()))
         .arg("--no-first-run")
         .arg("--no-default-browser-check")
-        .arg("--headless=new")
         .arg("--disable-gpu")
         .arg("--disable-extensions")
         .arg("about:blank")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    if headless {
+        cmd.arg("--headless=new");
+    }
 
-    let child = cmd.spawn().map_err(|e| {
-        BrowserError::ConnectionError(format!("Failed to launch Chrome: {}", e))
-    })?;
+    let child = cmd
+        .spawn()
+        .map_err(|e| BrowserError::ConnectionError(format!("Failed to launch Chrome: {}", e)))?;
 
     // Wait a moment for Chrome to start
     tokio::time::sleep(Duration::from_millis(500)).await;

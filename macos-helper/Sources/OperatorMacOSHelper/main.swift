@@ -6,6 +6,10 @@ import Foundation
 
 let maxLineBytes = 1_048_576  // 1 MiB
 
+/// Helper version reported in the ui.ping handshake. Keep in sync with the Rust
+/// workspace version in Cargo.toml ([workspace.package] version).
+let helperVersion = "0.17.0"
+
 // ---------------------------------------------------------------------------
 // Register methods
 // ---------------------------------------------------------------------------
@@ -26,6 +30,13 @@ dispatcher.register("ui.keyPress", handler: handleKeyPress)
 dispatcher.register("ui.selectMenu", handler: handleSelectMenu)
 dispatcher.register("ui.setValue", handler: handleSetValue)
 dispatcher.register("ui.inspect", handler: handleInspect)
+dispatcher.register("ui.snapshot", handler: handleSnapshot)
+dispatcher.register("ui.scroll", handler: handleScroll)
+dispatcher.register("ui.screenshot", handler: handleScreenshot)
+dispatcher.register("ui.checkScreenRecordingPermission", handler: handleCheckScreenRecording)
+// Document lane (M14) — PDFKit / Vision.
+dispatcher.register("doc.pdf_text", handler: handlePdfText)
+dispatcher.register("doc.ocr", handler: handleOcr)
 
 // ---------------------------------------------------------------------------
 // JSON encoder/decoder

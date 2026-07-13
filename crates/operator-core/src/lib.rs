@@ -1,9 +1,11 @@
 pub mod config;
 pub mod error;
 pub mod event;
+pub mod grants;
 pub mod interpolation;
 pub mod policy;
 pub mod redaction;
+pub mod secrets;
 pub mod selector;
 pub mod types;
 pub mod validation;

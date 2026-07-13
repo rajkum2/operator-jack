@@ -37,6 +37,52 @@ pub enum StepType {
     SysClipboardGet,
     #[serde(rename = "sys.clipboard_set")]
     SysClipboardSet,
+    /// List a directory (optionally glob-filtered) → array of entries (M13).
+    #[serde(rename = "sys.list_dir")]
+    SysListDir,
+
+    // Data lane (M13) — pure transforms, no side effects.
+    /// Parse CSV text (or a file) → array of row objects/arrays.
+    #[serde(rename = "data.parse_csv")]
+    DataParseCsv,
+    /// Parse JSON text (or a file), optionally at a JSON pointer.
+    #[serde(rename = "data.parse_json")]
+    DataParseJson,
+
+    // Network lane (M13) — HTTP under domain grants.
+    /// Make an HTTP request → {status, headers, body}.
+    #[serde(rename = "http.request")]
+    HttpRequest,
+
+    // Script lane (M14) — first-party app automation via osascript/shortcuts.
+    /// Run an AppleScript (High risk; exec-grade grant; body policy-scanned).
+    #[serde(rename = "script.applescript")]
+    ScriptApplescript,
+    /// Run a JavaScript-for-Automation (JXA) script (same gating as AppleScript).
+    #[serde(rename = "script.jxa")]
+    ScriptJxa,
+    /// Run a macOS Shortcut by name.
+    #[serde(rename = "shortcuts.run")]
+    ShortcutsRun,
+
+    // Document lane (M14) — text extraction via the Swift helper.
+    /// Extract text from a PDF (PDFKit).
+    #[serde(rename = "doc.pdf_text")]
+    DocPdfText,
+    /// OCR an image / scanned document (Vision.framework, on-device).
+    #[serde(rename = "doc.ocr")]
+    DocOcr,
+
+    // Control lane (M13) — deterministic control flow; bodies carry sub-steps.
+    /// Iterate a collection, running the body per element.
+    #[serde(rename = "control.foreach")]
+    ControlForeach,
+    /// Run one of two branches based on a condition.
+    #[serde(rename = "control.if")]
+    ControlIf,
+    /// Run the body until a condition holds or `max_iterations` is hit.
+    #[serde(rename = "control.repeat_until")]
+    ControlRepeatUntil,
 
     // UI lane
     #[serde(rename = "ui.check_accessibility_permission")]
@@ -65,6 +111,18 @@ pub enum StepType {
     UiListWindows,
     #[serde(rename = "ui.focus_window")]
     UiFocusWindow,
+    #[serde(rename = "ui.snapshot")]
+    UiSnapshot,
+    #[serde(rename = "ui.screenshot")]
+    UiScreenshot,
+    /// Scroll a scrollable element (or the focused window) by a delta or to an
+    /// edge (M13). No scroll verb existed in the UI lane before.
+    #[serde(rename = "ui.scroll")]
+    UiScroll,
+    /// Pause the run and hand control to the human (login walls, CAPTCHAs). The
+    /// agent never types credentials or solves CAPTCHAs itself (M11).
+    #[serde(rename = "ui.human_takeover")]
+    UiHumanTakeover,
 
     // Browser lane (M5)
     #[serde(rename = "browser.navigate")]
@@ -85,6 +143,20 @@ pub enum StepType {
     BrowserWaitFor,
     #[serde(rename = "browser.scroll")]
     BrowserScroll,
+    /// Extract text from ALL elements matching a selector (querySelectorAll → array).
+    #[serde(rename = "browser.get_text_all")]
+    BrowserGetTextAll,
+    /// Extract one attribute from ALL matching elements (→ array).
+    #[serde(rename = "browser.get_attributes_all")]
+    BrowserGetAttributesAll,
+    /// Compact snapshot of the page's interactive elements with ref ids (M12) —
+    /// the browser-lane analogue of `ui.snapshot`, so the agent loop is
+    /// lane-agnostic.
+    #[serde(rename = "browser.snapshot")]
+    BrowserSnapshot,
+    /// Download a file (via a URL or by clicking a link) to a target dir.
+    #[serde(rename = "browser.download")]
+    BrowserDownload,
 }
 
 impl StepType {
@@ -103,7 +175,14 @@ impl StepType {
             | StepType::SysExec
             | StepType::SysQuitApp
             | StepType::SysClipboardGet
-            | StepType::SysClipboardSet => "system",
+            | StepType::SysClipboardSet
+            | StepType::SysListDir
+            | StepType::DataParseCsv
+            | StepType::DataParseJson
+            | StepType::HttpRequest
+            | StepType::ScriptApplescript
+            | StepType::ScriptJxa
+            | StepType::ShortcutsRun => "system",
 
             StepType::UiCheckAccessibilityPermission
             | StepType::UiListApps
@@ -117,7 +196,19 @@ impl StepType {
             | StepType::UiWaitFor
             | StepType::UiSelectMenu
             | StepType::UiListWindows
-            | StepType::UiFocusWindow => "ui",
+            | StepType::UiFocusWindow
+            | StepType::UiSnapshot
+            | StepType::UiScreenshot
+            | StepType::UiScroll
+            // Document steps run in the Swift helper (PDFKit / Vision).
+            | StepType::DocPdfText
+            | StepType::DocOcr => "ui",
+
+            // Control lane: handled by the engine/session itself, not dispatched.
+            StepType::UiHumanTakeover
+            | StepType::ControlForeach
+            | StepType::ControlIf
+            | StepType::ControlRepeatUntil => "control",
 
             // Browser lane
             StepType::BrowserNavigate
@@ -128,7 +219,11 @@ impl StepType {
             | StepType::BrowserExecuteJs
             | StepType::BrowserScreenshot
             | StepType::BrowserWaitFor
-            | StepType::BrowserScroll => "browser",
+            | StepType::BrowserScroll
+            | StepType::BrowserGetTextAll
+            | StepType::BrowserGetAttributesAll
+            | StepType::BrowserSnapshot
+            | StepType::BrowserDownload => "browser",
         }
     }
 
@@ -148,6 +243,18 @@ impl StepType {
             StepType::SysQuitApp => "sys.quit_app",
             StepType::SysClipboardGet => "sys.clipboard_get",
             StepType::SysClipboardSet => "sys.clipboard_set",
+            StepType::SysListDir => "sys.list_dir",
+            StepType::DataParseCsv => "data.parse_csv",
+            StepType::DataParseJson => "data.parse_json",
+            StepType::HttpRequest => "http.request",
+            StepType::ScriptApplescript => "script.applescript",
+            StepType::ScriptJxa => "script.jxa",
+            StepType::ShortcutsRun => "shortcuts.run",
+            StepType::DocPdfText => "doc.pdf_text",
+            StepType::DocOcr => "doc.ocr",
+            StepType::ControlForeach => "control.foreach",
+            StepType::ControlIf => "control.if",
+            StepType::ControlRepeatUntil => "control.repeat_until",
             StepType::UiCheckAccessibilityPermission => "ui.check_accessibility_permission",
             StepType::UiListApps => "ui.list_apps",
             StepType::UiFocusApp => "ui.focus_app",
@@ -161,6 +268,10 @@ impl StepType {
             StepType::UiSelectMenu => "ui.select_menu",
             StepType::UiListWindows => "ui.list_windows",
             StepType::UiFocusWindow => "ui.focus_window",
+            StepType::UiSnapshot => "ui.snapshot",
+            StepType::UiScreenshot => "ui.screenshot",
+            StepType::UiScroll => "ui.scroll",
+            StepType::UiHumanTakeover => "ui.human_takeover",
             // Browser lane
             StepType::BrowserNavigate => "browser.navigate",
             StepType::BrowserClick => "browser.click",
@@ -171,6 +282,10 @@ impl StepType {
             StepType::BrowserScreenshot => "browser.screenshot",
             StepType::BrowserWaitFor => "browser.wait_for",
             StepType::BrowserScroll => "browser.scroll",
+            StepType::BrowserGetTextAll => "browser.get_text_all",
+            StepType::BrowserGetAttributesAll => "browser.get_attributes_all",
+            StepType::BrowserSnapshot => "browser.snapshot",
+            StepType::BrowserDownload => "browser.download",
         }
     }
 }
@@ -199,6 +314,18 @@ impl std::str::FromStr for StepType {
             "sys.quit_app" => Ok(StepType::SysQuitApp),
             "sys.clipboard_get" => Ok(StepType::SysClipboardGet),
             "sys.clipboard_set" => Ok(StepType::SysClipboardSet),
+            "sys.list_dir" => Ok(StepType::SysListDir),
+            "data.parse_csv" => Ok(StepType::DataParseCsv),
+            "data.parse_json" => Ok(StepType::DataParseJson),
+            "http.request" => Ok(StepType::HttpRequest),
+            "script.applescript" => Ok(StepType::ScriptApplescript),
+            "script.jxa" => Ok(StepType::ScriptJxa),
+            "shortcuts.run" => Ok(StepType::ShortcutsRun),
+            "doc.pdf_text" => Ok(StepType::DocPdfText),
+            "doc.ocr" => Ok(StepType::DocOcr),
+            "control.foreach" => Ok(StepType::ControlForeach),
+            "control.if" => Ok(StepType::ControlIf),
+            "control.repeat_until" => Ok(StepType::ControlRepeatUntil),
             "ui.check_accessibility_permission" => Ok(StepType::UiCheckAccessibilityPermission),
             "ui.list_apps" => Ok(StepType::UiListApps),
             "ui.focus_app" => Ok(StepType::UiFocusApp),
@@ -212,6 +339,10 @@ impl std::str::FromStr for StepType {
             "ui.select_menu" => Ok(StepType::UiSelectMenu),
             "ui.list_windows" => Ok(StepType::UiListWindows),
             "ui.focus_window" => Ok(StepType::UiFocusWindow),
+            "ui.snapshot" => Ok(StepType::UiSnapshot),
+            "ui.screenshot" => Ok(StepType::UiScreenshot),
+            "ui.scroll" => Ok(StepType::UiScroll),
+            "ui.human_takeover" => Ok(StepType::UiHumanTakeover),
             // Browser lane
             "browser.navigate" => Ok(StepType::BrowserNavigate),
             "browser.click" => Ok(StepType::BrowserClick),
@@ -222,6 +353,10 @@ impl std::str::FromStr for StepType {
             "browser.screenshot" => Ok(StepType::BrowserScreenshot),
             "browser.wait_for" => Ok(StepType::BrowserWaitFor),
             "browser.scroll" => Ok(StepType::BrowserScroll),
+            "browser.get_text_all" => Ok(StepType::BrowserGetTextAll),
+            "browser.get_attributes_all" => Ok(StepType::BrowserGetAttributesAll),
+            "browser.snapshot" => Ok(StepType::BrowserSnapshot),
+            "browser.download" => Ok(StepType::BrowserDownload),
             _ => Err(format!("Unknown step type: {}", s)),
         }
     }
@@ -263,6 +398,13 @@ pub enum RunStatus {
     CompletedWithErrors,
     Failed,
     Cancelled,
+    /// Stopped early for a non-error reason (budget exhausted). Completed step
+    /// results are preserved. Terminal.
+    Partial,
+    /// Suspended mid-run awaiting out-of-band approval or human takeover (M11).
+    /// A checkpoint is persisted; the run can be resumed with `--resume` once an
+    /// approval is granted. Non-terminal (it becomes a fresh run on resume).
+    Paused,
 }
 
 // ---------------------------------------------------------------------------
@@ -282,6 +424,76 @@ pub enum StepStatus {
 }
 
 // ---------------------------------------------------------------------------
+// Checkpoint / Approval (M11 — long-horizon supervision)
+// ---------------------------------------------------------------------------
+
+/// Which execution lane produced a checkpoint, so `--resume` knows how to pick
+/// the run back up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckpointKind {
+    /// A deterministic plan run: resume replays from `cursor` (step index).
+    Plan,
+    /// A native agent run: resume re-seeds the transcript and continues.
+    Agent,
+}
+
+/// A persisted snapshot of a paused run, enough to resume it after the process
+/// exits. One (latest) checkpoint per run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Checkpoint {
+    pub run_id: String,
+    pub plan_id: String,
+    pub kind: CheckpointKind,
+    /// Resume cursor. For plans, `{ "step_index": N }`; for agents, the goal and
+    /// iteration are carried alongside in `transcript`/`goal`.
+    pub cursor: serde_json::Value,
+    /// Run-scoped variable map at pause time (control-flow vars, M13).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variables: Option<serde_json::Value>,
+    /// Agent transcript lines (agent runs only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<Vec<String>>,
+    /// The agent goal (agent runs only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub goal: Option<String>,
+    /// Why the run paused (escalation reason / takeover prompt).
+    pub reason: String,
+}
+
+/// The disposition of a pending approval request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalStatus {
+    Pending,
+    Approved,
+    Denied,
+}
+
+/// What kind of human decision a paused run is waiting on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalKind {
+    /// A high-consequence action the always-escalate classifier flagged.
+    Escalation,
+    /// A `ui.human_takeover` step (login/CAPTCHA); the human drives, then resumes.
+    Takeover,
+}
+
+/// A request for out-of-band human approval that gates resuming a paused run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Approval {
+    pub id: String,
+    pub run_id: String,
+    pub kind: ApprovalKind,
+    pub summary: String,
+    pub status: ApprovalStatus,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decided_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+// ---------------------------------------------------------------------------
 // Plan
 // ---------------------------------------------------------------------------
 
@@ -297,6 +509,12 @@ pub struct Plan {
     pub allow_apps: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allow_domains: Option<Vec<String>>,
+    /// Task-scoped capability grants (M8). None = unrestricted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grants: Option<crate::grants::Grants>,
+    /// Whole-run resource budget (M8). None = unbounded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget: Option<crate::grants::RunBudget>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variables: Option<HashMap<String, serde_json::Value>>,
     pub steps: Vec<Step>,

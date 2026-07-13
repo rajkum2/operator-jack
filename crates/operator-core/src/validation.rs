@@ -63,14 +63,10 @@ pub fn validate_plan(plan: &Plan) -> Result<(), Vec<OperatorError>> {
             )));
         }
 
-        // 5. Check for unsupported browser.* types (this is handled by serde
-        //    deserialization, but we note it for completeness). Since StepType
-        //    is an enum, unknown types would have failed to parse. We validate
-        //    the step_type is known by checking it serializes correctly.
-        let type_str = step.step_type.to_string();
-        if type_str.starts_with("browser.") {
-            errors.push(OperatorError::unsupported_step_type(&type_str));
-        }
+        // 5. browser.* steps are wired into the engine as of M12 (the browser
+        //    lane runs them through an isolated Chrome over CDP), so they are no
+        //    longer rejected here. Unknown step types can't reach this point:
+        //    StepType is an enum, so serde deserialization already rejected them.
 
         // 6. Validate required params per step type
         if let Err(msg) = validate_step_params(&step.step_type, &step.params) {
@@ -153,6 +149,17 @@ pub fn validate_step_params(
         StepType::SysQuitApp => require_string_param(params, "app"),
         StepType::SysClipboardGet => Ok(()),
         StepType::SysClipboardSet => require_string_param(params, "text"),
+        StepType::SysListDir => require_string_param(params, "path"),
+        // data.*: need `text` OR `path` (checked at runtime).
+        StepType::DataParseCsv => Ok(()),
+        StepType::DataParseJson => Ok(()),
+        StepType::HttpRequest => require_string_param(params, "url"),
+        // Script lane (M14).
+        StepType::ScriptApplescript | StepType::ScriptJxa => require_string_param(params, "script"),
+        StepType::ShortcutsRun => require_string_param(params, "name"),
+        // Document lane (M14).
+        StepType::DocPdfText => require_string_param(params, "path"),
+        StepType::DocOcr => require_string_param(params, "path"),
         StepType::UiCheckAccessibilityPermission => Ok(()),
         StepType::UiListApps => Ok(()),
         StepType::UiFocusApp => require_string_param(params, "app"),
@@ -194,32 +201,48 @@ pub fn validate_step_params(
             require_string_param(params, "app")?;
             require_object_param(params, "window")
         }
+        StepType::UiSnapshot => require_string_param(params, "app"),
+        // ui.screenshot: `app` is optional (omit to capture the main display).
+        StepType::UiScreenshot => Ok(()),
+        StepType::UiScroll => require_string_param(params, "app"),
+        // ui.human_takeover: all params optional (`prompt`, `wait_for`).
+        StepType::UiHumanTakeover => Ok(()),
+        // control.*: bodies (sub-steps) + conditions are validated by the
+        // interpreter at run time; require the key structural params here.
+        StepType::ControlForeach => {
+            require_present(params, "items")?;
+            require_string_param(params, "as")?;
+            require_array_param(params, "steps")
+        }
+        StepType::ControlIf => require_object_param(params, "condition"),
+        StepType::ControlRepeatUntil => {
+            require_array_param(params, "steps")?;
+            require_object_param(params, "condition")
+        }
         // Browser lane
-        StepType::BrowserNavigate => {
-            require_string_param(params, "url")
-        }
-        StepType::BrowserClick => {
-            require_string_param(params, "selector")
-        }
+        StepType::BrowserNavigate => require_string_param(params, "url"),
+        StepType::BrowserClick => require_string_param(params, "selector"),
         StepType::BrowserType => {
             require_string_param(params, "selector")?;
             require_string_param(params, "text")
         }
-        StepType::BrowserGetText => {
-            require_string_param(params, "selector")
-        }
+        StepType::BrowserGetText => require_string_param(params, "selector"),
         StepType::BrowserGetAttribute => {
             require_string_param(params, "selector")?;
             require_string_param(params, "attribute")
         }
-        StepType::BrowserExecuteJs => {
-            require_string_param(params, "script")
-        }
+        StepType::BrowserExecuteJs => require_string_param(params, "script"),
         StepType::BrowserScreenshot => Ok(()),
-        StepType::BrowserWaitFor => {
-            require_string_param(params, "selector")
-        }
+        StepType::BrowserWaitFor => require_string_param(params, "selector"),
         StepType::BrowserScroll => Ok(()),
+        StepType::BrowserGetTextAll => require_string_param(params, "selector"),
+        StepType::BrowserGetAttributesAll => {
+            require_string_param(params, "selector")?;
+            require_string_param(params, "attribute")
+        }
+        StepType::BrowserSnapshot => Ok(()),
+        // browser.download: needs a `url` OR a `selector` to click; checked at runtime.
+        StepType::BrowserDownload => Ok(()),
     }
 }
 
@@ -231,6 +254,15 @@ fn require_string_param(params: &serde_json::Value, key: &str) -> Result<(), Str
     match params.get(key) {
         Some(serde_json::Value::String(_)) => Ok(()),
         Some(_) => Err(format!("param '{}' must be a string", key)),
+        None => Err(format!("missing required param '{}'", key)),
+    }
+}
+
+/// Requires a param to be present with any type (used where the value may be an
+/// array literal OR a `{{var}}` string, e.g. control.foreach `items`).
+fn require_present(params: &serde_json::Value, key: &str) -> Result<(), String> {
+    match params.get(key) {
+        Some(_) => Ok(()),
         None => Err(format!("missing required param '{}'", key)),
     }
 }
@@ -371,6 +403,31 @@ mod tests {
 
         let result = validate_step_params(&StepType::UiListWindows, &json!({"app": "Finder"}));
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_snapshot_and_screenshot_step_types() {
+        // ui.snapshot requires app; ui.screenshot's app is optional.
+        assert!(validate_step_params(&StepType::UiSnapshot, &json!({})).is_err());
+        assert!(validate_step_params(&StepType::UiSnapshot, &json!({"app": "Calculator"})).is_ok());
+        assert!(validate_step_params(&StepType::UiScreenshot, &json!({})).is_ok());
+        assert!(
+            validate_step_params(&StepType::UiScreenshot, &json!({"app": "Calculator"})).is_ok()
+        );
+
+        // Round-trip through the string form and confirm they are ui-lane, Low risk.
+        for (s, st) in [
+            ("ui.snapshot", StepType::UiSnapshot),
+            ("ui.screenshot", StepType::UiScreenshot),
+        ] {
+            assert_eq!(st.as_str(), s);
+            assert_eq!(s.parse::<StepType>().unwrap(), st);
+            assert_eq!(st.lane(), "ui");
+            assert_eq!(
+                crate::policy::risk_level(&st),
+                crate::policy::RiskLevel::Low
+            );
+        }
     }
 
     #[test]

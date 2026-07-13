@@ -1,0 +1,13 @@
+[package]
+name = "operator-agent"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+operator-core = { path = "../operator-core" }
+operator-runtime = { path = "../operator-runtime" }
+operator-planner = { path = "../operator-planner" }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+ulid.workspace = true

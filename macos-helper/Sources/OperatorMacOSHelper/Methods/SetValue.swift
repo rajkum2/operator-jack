@@ -18,20 +18,22 @@ import Foundation
 func handleSetValue(_ params: [String: JSONValue]) throws -> [String: JSONValue] {
     try ensureAccessibility()
     let app = try extractApp(from: params)
-    let appElement = axAppElement(for: app)
-
-    guard let selector = SelectorParams.parse(from: params) else {
-        throw HelperError(code: "INVALID_PARAMS", message: "Missing or invalid 'selector' parameter")
-    }
 
     guard case .string(let newValue) = params["value"] else {
         throw HelperError(code: "INVALID_PARAMS", message: "Missing required 'value' parameter")
     }
 
-    let waitMs = extractImplicitWaitMs(from: params)
-    let windowElement = try resolveWindow(appElement: appElement, scope: selector.window)
-    let results = try implicitWaitForElement(root: windowElement, selector: selector, waitMs: waitMs)
-    let match = try disambiguate(results: results, index: selector.index)
+    // Resolve target via element_ref (preferred) or selector.
+    let match = try resolveActionTarget(params: params, app: app)
+
+    // Refuse to set a secure (password) field's value; credentials must use the
+    // secret path, not a model-supplied value.
+    if isSecureTextField(match.element) {
+        throw HelperError(
+            code: "SECURE_FIELD_REFUSED",
+            message: "Refusing to set a secure text field; use a {{secret:name}} reference instead"
+        )
+    }
 
     // Check if the value attribute is settable
     var settable: DarwinBoolean = false

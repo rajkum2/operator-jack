@@ -2,7 +2,6 @@
 
 use operator_core::types::Plan;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, trace};
 
 use crate::error::PlannerError;
 use crate::prompt::{system_prompt, user_prompt};
@@ -36,28 +35,11 @@ impl AnthropicProvider {
         self.config
             .model
             .as_deref()
-            .unwrap_or("claude-3-haiku-20240307")
+            .unwrap_or("claude-haiku-4-5-20251001")
     }
 
     fn extract_plan_from_response(&self, text: &str) -> Result<Plan, PlannerError> {
-        // Try to extract JSON from markdown code blocks
-        let json_str = if let Some(start) = text.find("```json") {
-            let after_start = &text[start + 7..];
-            if let Some(end) = after_start.find("```") {
-                after_start[..end].trim()
-            } else {
-                text.trim()
-            }
-        } else if let Some(start) = text.find("```") {
-            let after_start = &text[start + 3..];
-            if let Some(end) = after_start.find("```") {
-                after_start[..end].trim()
-            } else {
-                text.trim()
-            }
-        } else {
-            text.trim()
-        };
+        let json_str = crate::prompt::extract_json_from_response(text);
 
         let plan: Plan = serde_json::from_str(json_str)
             .map_err(|e| PlannerError::ParseError(format!("Invalid JSON: {}", e)))?;
@@ -74,10 +56,15 @@ impl LlmProvider for AnthropicProvider {
     }
 
     fn default_model(&self) -> &'static str {
-        "claude-3-haiku-20240307"
+        "claude-haiku-4-5-20251001"
     }
 
     fn generate_plan(&self, instruction: &str) -> Result<Plan, PlannerError> {
+        let content = self.chat(&system_prompt(), &user_prompt(instruction))?;
+        self.extract_plan_from_response(&content)
+    }
+
+    fn chat(&self, system: &str, user: &str) -> Result<String, PlannerError> {
         let api_key = self
             .config
             .api_key
@@ -91,18 +78,14 @@ impl LlmProvider for AnthropicProvider {
             model: self.model().to_string(),
             max_tokens: self.config.max_tokens.unwrap_or(4096),
             temperature: self.config.temperature.unwrap_or(0.2),
-            system: system_prompt(),
+            system: system.to_string(),
             messages: vec![Message {
                 role: "user".to_string(),
-                content: user_prompt(instruction),
+                content: user.to_string(),
             }],
         };
 
-        trace!("Sending request to Anthropic API");
-        debug!("Request model: {}", request.model);
-
         let timeout = std::time::Duration::from_secs(self.config.timeout_seconds.unwrap_or(60));
-
         let response = ureq::post(&format!("{}/messages", self.base_url()))
             .set("x-api-key", api_key)
             .set("anthropic-version", "2023-06-01")
@@ -129,11 +112,7 @@ impl LlmProvider for AnthropicProvider {
         if anthropic_response.content.is_empty() {
             return Err(PlannerError::EmptyPlan);
         }
-
-        let content = &anthropic_response.content[0].text;
-        trace!("Anthropic response: {}", content);
-
-        self.extract_plan_from_response(content)
+        Ok(anthropic_response.content[0].text.clone())
     }
 }
 
@@ -176,7 +155,7 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        assert_eq!(provider.default_model(), "claude-3-haiku-20240307");
+        assert_eq!(provider.default_model(), "claude-haiku-4-5-20251001");
     }
 
     #[test]

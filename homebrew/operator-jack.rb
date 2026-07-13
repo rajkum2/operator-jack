@@ -2,15 +2,17 @@
 # To use: brew install rajkum2/tap/operator-jack
 #
 # This file is a template. The actual formula lives in the
-# rajkum2/homebrew-tap repository and is updated by the release workflow.
+# rajkum2/homebrew-tap repository. The release workflow (release.yml) now
+# includes a tap-update step that bumps the tap's url/version/sha256 on each
+# tagged release; keep the version/url below in sync when updating this template.
 
 class OperatorJack < Formula
   desc "Local-first CLI for deterministic macOS automation"
   homepage "https://github.com/rajkum2/operator-jack"
-  url "https://github.com/rajkum2/operator-jack/releases/download/v0.4.0/operator-jack-v0.4.0-macos-universal.tar.gz"
+  url "https://github.com/rajkum2/operator-jack/releases/download/v0.7.1/operator-jack-v0.7.1-macos-universal.tar.gz"
   sha256 "PLACEHOLDER_SHA256"
   license "MIT"
-  version "0.4.0"
+  version "0.7.1"
 
   depends_on :macos
 

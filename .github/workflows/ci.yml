@@ -38,7 +38,13 @@ jobs:
         run: cargo clippy -- -D warnings
 
       - name: Run tests
-        run: cargo test
+        run: cargo test --locked
 
       - name: Build Swift helper
         run: cd macos-helper && swift build
+
+      - name: Run Swift helper tests
+        run: cd macos-helper && swift test
+
+      - name: Validate shipped examples & skills
+        run: ./scripts/check-examples.sh

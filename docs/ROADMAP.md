@@ -1,5 +1,10 @@
 # Operator Jack Roadmap
 
+> **SUPERSEDED (2026-07-08):** This roadmap is superseded by [`MASTER_PLAN.md`](../MASTER_PLAN.md) at
+> the repo root, which is now the authoritative forward roadmap (M7-M15). This file is kept for
+> historical reference only. M0-M6 are complete; the old M7 (Robustness) and old M8 (Offline STT)
+> described below have been re-scoped/absorbed into the new plan.
+
 ## Milestones
 
 ### M0: Scaffolding -- DONE
@@ -60,9 +65,9 @@ Built the Swift helper binary and IPC bridge:
 - Helper auto-discovery: CLI flag, env var, PATH, sibling, dev fallback.
 - 9 new unit tests (5 framing + 4 client), 73 total tests passing.
 
-### M3: UI Executor v1
+### M3: UI Executor v1 -- DONE
 
-**Status:** Planned
+**Status:** Complete
 
 Implement core UI automation steps:
 
@@ -79,9 +84,9 @@ Implement core UI automation steps:
 - Non-interactive disambiguation: fail with `SELECTOR_AMBIGUOUS`.
 - `allow_apps` enforcement for all UI steps.
 
-### M4: Rule-Based Planner
+### M4: Rule-Based Planner -- DONE
 
-**Status:** Planned
+**Status:** Complete (shipped as an LLM-backed planner, not rule-based — see CHANGELOG 0.5.0)
 
 Enable natural language input for common automation patterns:
 
@@ -102,9 +107,9 @@ Enable natural language input for common automation patterns:
 - `operator-jack do "open Notes and type hello"` command interface.
 - Graceful fallback: unrecognized input returns a clear error with suggestions.
 
-### M5: Browser Executor (CDP)
+### M5: Browser Executor (CDP) -- DONE
 
-**Status:** Planned
+**Status:** Complete (browser CLI subcommands only; plan-lane wiring is M12 in MASTER_PLAN.md)
 
 Add Chrome DevTools Protocol support for web automation:
 
@@ -119,9 +124,9 @@ Add Chrome DevTools Protocol support for web automation:
 - `allow_domains` enforcement: reject navigation to domains not in the allowlist.
 - Connection lifecycle management: discover CDP port, connect WebSocket, handle disconnects.
 
-### M6: Skills System
+### M6: Skills System -- DONE
 
-**Status:** Planned
+**Status:** Complete
 
 Introduce reusable automation macros:
 

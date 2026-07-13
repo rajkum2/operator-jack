@@ -1,3 +1,4 @@
+use operator_core::grants::{check_escalation, check_grants, normalize_path, Grants};
 use operator_core::policy::{requires_confirmation, risk_level, RiskLevel};
 use operator_core::types::{Mode, Step, StepType};
 use std::io::{self, BufRead, Write};
@@ -19,13 +20,26 @@ pub enum PolicyDecision {
     ConfirmationRequired,
 }
 
-/// An error from the policy gate (app/domain allow-list violations).
+/// An error from the policy gate — a hard denial (allow-list, grant, or an
+/// always-escalate action). Distinct from a confirmation prompt.
 #[derive(Debug, thiserror::Error)]
 pub enum PolicyError {
     #[error("App not allowed: {0}")]
     AppNotAllowed(String),
     #[error("Domain not allowed: {0}")]
     DomainNotAllowed(String),
+    #[error("Grant required: {0}")]
+    GrantDenied(String),
+    #[error("Escalation required (a human must approve): {0}")]
+    EscalationRequired(String),
+}
+
+impl PolicyError {
+    /// True if this denial is a policy/grant/escalation issue (→ exit code 3),
+    /// as opposed to an ordinary step failure.
+    pub fn is_policy_denial(&self) -> bool {
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -41,7 +55,17 @@ pub struct PolicyGate {
     dry_run: bool,
     allow_apps: Vec<String>,
     allow_domains: Vec<String>,
+    /// Grant layers (config + plan). Every present layer must allow a step.
+    grant_layers: Vec<Grants>,
+    /// One-shot approved-escalation allowances (M11). When a paused run is
+    /// resumed after an out-of-band approval, the escalating action is let
+    /// through exactly once per granted approval. Interior-mutable so the
+    /// `&self` check path can consume a grant.
+    escalation_grants: std::cell::Cell<usize>,
 }
+
+/// Escalate a `sys.delete_path` that would remove more than this many entries.
+const BULK_DELETE_THRESHOLD: usize = 25;
 
 impl PolicyGate {
     /// Creates a new policy gate.
@@ -52,6 +76,7 @@ impl PolicyGate {
     /// * `dry_run` -- if true, all steps return `DryRun` without executing.
     /// * `allow_apps` -- app allow-list; empty means "allow all".
     /// * `allow_domains` -- domain allow-list for `sys.open_url`; empty means "allow all".
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         mode: Mode,
         yes_to_all: bool,
@@ -59,6 +84,7 @@ impl PolicyGate {
         dry_run: bool,
         allow_apps: Vec<String>,
         allow_domains: Vec<String>,
+        grant_layers: Vec<Grants>,
     ) -> Self {
         Self {
             mode,
@@ -67,7 +93,16 @@ impl PolicyGate {
             dry_run,
             allow_apps,
             allow_domains,
+            grant_layers,
+            escalation_grants: std::cell::Cell::new(0),
         }
+    }
+
+    /// Grants one out-of-band-approved escalation (M11 resume): the next action
+    /// the always-escalate classifier would block is allowed through exactly
+    /// once. Call once per approved approval before resuming.
+    pub fn grant_one_escalation(&self) {
+        self.escalation_grants.set(self.escalation_grants.get() + 1);
     }
 
     /// Checks whether a step is allowed to run under the current policy.
@@ -108,8 +143,10 @@ impl PolicyGate {
             }
         }
 
-        // -- 2. Allow-domains check (sys.open_url only, using interpolated params)
-        if !self.allow_domains.is_empty() && step.step_type == StepType::SysOpenUrl {
+        // -- 2. Allow-domains check (sys.open_url + http.request, interpolated)
+        if !self.allow_domains.is_empty()
+            && matches!(step.step_type, StepType::SysOpenUrl | StepType::HttpRequest)
+        {
             if let Some(url) = params.get("url").and_then(|v| v.as_str()) {
                 let domain = extract_domain(url);
                 if !domain.is_empty() {
@@ -121,6 +158,45 @@ impl PolicyGate {
                         return Err(PolicyError::DomainNotAllowed(domain));
                     }
                 }
+            }
+        }
+
+        // -- 2b. Always-escalate classifier (non-overridable by --yes / grants,
+        // except a one-shot approved-escalation grant from an M11 resume) ------
+        let escalation_reason = check_escalation(&step.step_type, params)
+            .map(|e| e.reason)
+            .or_else(|| {
+                // Bulk-delete escalation needs a filesystem stat of the target.
+                if step.step_type == StepType::SysDeletePath {
+                    if let Some(path) = params.get("path").and_then(|v| v.as_str()) {
+                        let count =
+                            count_entries(&normalize_path(path), BULK_DELETE_THRESHOLD + 1);
+                        if count > BULK_DELETE_THRESHOLD {
+                            return Some(format!(
+                                "sys.delete_path would remove more than {BULK_DELETE_THRESHOLD} entries under {path}"
+                            ));
+                        }
+                    }
+                }
+                None
+            });
+        if let Some(reason) = escalation_reason {
+            if self.escalation_grants.get() > 0 {
+                self.escalation_grants.set(self.escalation_grants.get() - 1);
+                tracing::warn!(
+                    step_type = %step.step_type,
+                    "consuming one-shot approved-escalation grant (M11 resume)"
+                );
+            } else {
+                return Err(PolicyError::EscalationRequired(reason));
+            }
+        }
+
+        // -- 2c. Task-scoped grants (config + plan layers must all allow) -------
+        if !self.grant_layers.is_empty() {
+            let layers: Vec<&Grants> = self.grant_layers.iter().collect();
+            if let Err(denial) = check_grants(&step.step_type, params, &layers) {
+                return Err(PolicyError::GrantDenied(denial.message));
             }
         }
 
@@ -223,6 +299,30 @@ fn extract_domain(url: &str) -> String {
     }
 
     host_and_port.to_string()
+}
+
+/// Counts filesystem entries under `path` (itself + descendants), stopping once
+/// `limit` is exceeded. Used to detect bulk deletes without walking huge trees.
+fn count_entries(path: &str, limit: usize) -> usize {
+    fn walk(p: &std::path::Path, limit: usize, count: &mut usize) {
+        if *count > limit {
+            return;
+        }
+        *count += 1;
+        if p.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(p) {
+                for entry in entries.flatten() {
+                    if *count > limit {
+                        return;
+                    }
+                    walk(&entry.path(), limit, count);
+                }
+            }
+        }
+    }
+    let mut count = 0;
+    walk(std::path::Path::new(path), limit, &mut count);
+    count
 }
 
 /// Prompts the user on stderr/stdin and returns true if they type 'y' or 'Y'.

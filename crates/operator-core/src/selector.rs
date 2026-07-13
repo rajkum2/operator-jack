@@ -88,7 +88,8 @@ impl Selector {
             return Ok(());
         }
 
-        // At least one identifying field must be present
+        // At least one identifying field must be present. `path` counts as of M7
+        // (the helper matches it as a suffix of the computed traversal path).
         let has_identifier = self.path.is_some()
             || self.identifier.is_some()
             || self.name.is_some()
@@ -312,5 +313,41 @@ mod tests {
 
         let deserialized: Selector = serde_json::from_value(json).unwrap();
         assert_eq!(deserialized.any_of.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_empty_selector_is_invalid() {
+        let sel = Selector::default();
+        assert!(sel.validate().is_err());
+    }
+
+    #[test]
+    fn test_path_only_selector_is_valid() {
+        // As of M7 the helper matches `path` (suffix of the computed traversal
+        // path), so a path-only selector is a valid locator again.
+        let sel = Selector {
+            path: Some("AXWindow/AXButton[0]".into()),
+            ..Default::default()
+        };
+        assert!(sel.validate().is_ok());
+    }
+
+    #[test]
+    fn test_path_with_role_is_valid() {
+        let sel = Selector {
+            path: Some("AXWindow/AXButton[0]".into()),
+            role: Some("AXButton".into()),
+            ..Default::default()
+        };
+        assert!(sel.validate().is_ok());
+    }
+
+    #[test]
+    fn test_index_only_selector_is_invalid() {
+        let sel = Selector {
+            index: Some(0),
+            ..Default::default()
+        };
+        assert!(sel.validate().is_err());
     }
 }

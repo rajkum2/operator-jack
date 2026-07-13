@@ -102,9 +102,8 @@ impl Planner {
                     ProviderType::Openai => self.config.openai.api_key.is_some(),
                     ProviderType::Anthropic => self.config.anthropic.api_key.is_some(),
                     ProviderType::Ollama => {
-                        // Check if Ollama is running
-                        crate::ollama::OllamaProvider::new(self.config.ollama.clone())
-                            .is_available()
+                        // Ready only if the daemon is up AND the model is pulled.
+                        crate::ollama::OllamaProvider::new(self.config.ollama.clone()).is_ready()
                     }
                 };
                 (pt, available)
@@ -114,9 +113,10 @@ impl Planner {
 
     /// Returns the first available provider, preferring local Ollama.
     pub fn first_available_provider(&self) -> Option<ProviderType> {
-        // Prefer Ollama if available (local, no API key needed)
+        // Prefer Ollama if usable (local, no API key needed — but only if its
+        // model is actually pulled, not merely that the daemon is up).
         let ollama = crate::ollama::OllamaProvider::new(self.config.ollama.clone());
-        if ollama.is_available() {
+        if ollama.is_ready() {
             return Some(ProviderType::Ollama);
         }
 
@@ -135,7 +135,7 @@ impl Planner {
     }
 
     /// Creates a provider instance from the configuration.
-    fn create_provider(
+    pub fn create_provider(
         &self,
         provider_type: ProviderType,
     ) -> Result<Box<dyn LlmProvider>, PlannerError> {
